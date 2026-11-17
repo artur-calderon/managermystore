@@ -1,8 +1,8 @@
-import { and, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNull, max } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { diningTables, orderItems, orders, products } from "@/lib/db/schema";
-import type { OrderStatus } from "@/lib/db/schema";
+import { activeOrderStatuses, type OrderStatus } from "@/lib/db/schema";
 import type { Actor } from "@/modules/tenancy/service";
 import { assertCan } from "@/server/authorization";
 import { AppError } from "@/server/errors";
@@ -10,8 +10,6 @@ import { fromCents, toCents } from "@/server/money";
 import { transaction } from "@/server/transaction";
 
 import { recordSale } from "@/modules/cash/service";
-
-const activeStatuses = ["pending", "preparing", "ready"] as const;
 
 const kitchenTransitions: Partial<Record<OrderStatus, OrderStatus>> = {
   pending: "preparing",
@@ -218,6 +216,30 @@ export async function advanceOrder(actor: Actor, orderId: string) {
   });
 }
 
+/** Delivery: marca um pedido pronto como "saiu para entrega". */
+export async function dispatchOrder(actor: Actor, orderId: string) {
+  assertCan(actor.role, "orders.close");
+
+  return transaction(async (tx) => {
+    const order = await lockOrder(tx, actor.establishmentId, orderId);
+
+    if (order.channel !== "delivery") {
+      throw new AppError("invalid_transition", "Somente pedidos de delivery saem para entrega.");
+    }
+    if (order.status !== "ready") {
+      throw new AppError("invalid_transition", "O pedido precisa estar pronto para sair para entrega.");
+    }
+
+    const [updated] = await tx
+      .update(orders)
+      .set({ status: "out_for_delivery" })
+      .where(eq(orders.id, order.id))
+      .returning();
+
+    return updated;
+  });
+}
+
 export async function cancelOrder(actor: Actor, orderId: string) {
   assertCan(actor.role, "orders.cancel");
 
@@ -244,8 +266,15 @@ export async function closeOrder(actor: Actor, orderId: string) {
   return transaction(async (tx) => {
     const order = await lockOrder(tx, actor.establishmentId, orderId);
 
-    if (order.status !== "ready") {
-      throw new AppError("invalid_transition", "Somente pedidos prontos podem ser fechados.");
+    // Delivery fecha depois de sair para entrega; os demais canais fecham a partir de "pronto".
+    const closableFrom: OrderStatus = order.channel === "delivery" ? "out_for_delivery" : "ready";
+    if (order.status !== closableFrom) {
+      throw new AppError(
+        "invalid_transition",
+        order.channel === "delivery"
+          ? "Pedidos de delivery só podem ser fechados depois de saírem para entrega."
+          : "Somente pedidos prontos podem ser fechados.",
+      );
     }
 
     const totalAmount = await recomputeTotal(tx, actor.establishmentId, order.id);
@@ -270,15 +299,65 @@ export async function closeOrder(actor: Actor, orderId: string) {
   });
 }
 
-export async function listActiveOrders(establishmentId: string) {
-  const rows = await listOrders(establishmentId, [...activeStatuses]);
-  const detailed = [];
+/** Pedidos prontos para fechar no caixa: "pronto" (salão/balcão) ou "saiu para entrega" (delivery). */
+export async function listClosableOrders(establishmentId: string) {
+  const rows = await listOrders(establishmentId, ["ready", "out_for_delivery"]);
+  return rows.filter((order) =>
+    order.channel === "delivery" ? order.status === "out_for_delivery" : order.status === "ready",
+  );
+}
 
-  for (const row of rows) {
-    detailed.push(await getOrder(establishmentId, row.id));
+export async function listActiveOrders(establishmentId: string) {
+  return withItems(establishmentId, await listOrders(establishmentId, [...activeOrderStatuses]));
+}
+
+/** Lista pedidos com seus itens em duas consultas (sem uma consulta por pedido). */
+export async function listOrdersWithItems(establishmentId: string, statuses: OrderStatus[], limit?: number) {
+  const rows = await listOrders(establishmentId, statuses);
+  return withItems(establishmentId, limit === undefined ? rows : rows.slice(0, limit));
+}
+
+/**
+ * Assinatura barata do estado dos pedidos do estabelecimento.
+ * Muda sempre que um pedido é criado ou alterado (status, itens, total), pois `updated_at` é
+ * atualizado em toda escrita. As telas em tempo real comparam esse valor para saber se recarregam.
+ */
+export async function getOrdersVersion(establishmentId: string) {
+  const [row] = await db
+    .select({ lastUpdate: max(orders.updatedAt), total: count() })
+    .from(orders)
+    .where(eq(orders.establishmentId, establishmentId));
+
+  return `${row?.lastUpdate?.getTime() ?? 0}:${row?.total ?? 0}`;
+}
+
+async function withItems<T extends { id: string }>(establishmentId: string, rows: T[]) {
+  if (rows.length === 0) {
+    return [];
   }
 
-  return detailed;
+  const items = await db
+    .select()
+    .from(orderItems)
+    .where(
+      and(
+        eq(orderItems.establishmentId, establishmentId),
+        inArray(
+          orderItems.orderId,
+          rows.map((row) => row.id),
+        ),
+      ),
+    )
+    .orderBy(orderItems.createdAt);
+
+  const byOrder = new Map<string, (typeof items)[number][]>();
+  for (const item of items) {
+    const current = byOrder.get(item.orderId) ?? [];
+    current.push(item);
+    byOrder.set(item.orderId, current);
+  }
+
+  return rows.map((row) => ({ ...row, items: byOrder.get(row.id) ?? [] }));
 }
 
 async function lockOrder(

@@ -1,12 +1,12 @@
 import { Suspense } from "react";
 import { connection } from "next/server";
 
-import { Poller } from "@/components/shared/poller";
+import { LiveRefresh } from "@/components/shared/live-refresh";
 import { BoundForm, SubmitButton } from "@/components/shared/form";
 import { advanceOrderAction } from "@/modules/orders/actions";
 import { listActiveOrders } from "@/modules/orders/service";
 import { can } from "@/server/authorization";
-import { requireActor } from "@/server/context";
+import { requirePageActor } from "@/server/context";
 
 export default function KitchenPage() {
   return (
@@ -18,13 +18,15 @@ export default function KitchenPage() {
 
 async function Kitchen() {
   await connection();
-  const actor = await requireActor();
-  const orders = await listActiveOrders(actor.establishmentId);
+  const actor = await requirePageActor("/painel/cozinha");
+  const orders = (await listActiveOrders(actor.establishmentId)).filter(
+    (order) => order.status !== "out_for_delivery",
+  );
 
   return (
     <section className="grid gap-4">
       <h1 className="text-2xl font-semibold">Cozinha</h1>
-      <Poller />
+      <LiveRefresh />
       {orders.length === 0 ? <p>Nenhum pedido ativo.</p> : null}
       {orders.map((order) => (
         <article key={order.id} className="grid gap-2 border p-3">

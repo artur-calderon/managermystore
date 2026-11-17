@@ -54,6 +54,7 @@ export const products = pgTable(
     description: text("description"),
     price: money("price").notNull(),
     costPrice: money("cost_price"),
+    stockQuantity: integer("stock_quantity").notNull().default(0),
     isAvailable: boolean("is_available").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
       .notNull()
@@ -76,6 +77,7 @@ export const products = pgTable(
     index("products_establishment_category_idx").on(table.establishmentId, table.categoryId),
     check("products_price_check", sql`${table.price} >= 0`),
     check("products_cost_price_check", sql`${table.costPrice} is null or ${table.costPrice} >= 0`),
+    check("products_stock_quantity_check", sql`${table.stockQuantity} >= 0`),
   ],
 );
 
@@ -138,10 +140,22 @@ export const diningTables = pgTable(
   ],
 );
 
-export const orderStatuses = ["pending", "preparing", "ready", "closed", "cancelled"] as const;
+export const orderStatuses = [
+  "pending",
+  "preparing",
+  "ready",
+  "out_for_delivery",
+  "closed",
+  "cancelled",
+] as const;
 export type OrderStatus = (typeof orderStatuses)[number];
-export const orderChannels = ["waiter", "catalog"] as const;
+/** Pedidos em andamento (ainda não fechados nem cancelados). */
+export const activeOrderStatuses = ["pending", "preparing", "ready", "out_for_delivery"] as const;
+export type ActiveOrderStatus = (typeof activeOrderStatuses)[number];
+export const orderChannels = ["waiter", "catalog", "delivery"] as const;
 export type OrderChannel = (typeof orderChannels)[number];
+
+export { paymentMethods, type PaymentMethod } from "../../payment-methods";
 
 export const orders = pgTable(
   "orders",
@@ -160,9 +174,11 @@ export const orders = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
       .notNull()
       .defaultNow(),
+    // Atualizado em toda alteração: é o que as telas em tempo real observam.
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
       .notNull()
-      .defaultNow(),
+      .defaultNow()
+      .$onUpdate(() => new Date()),
     closedAt: timestamp("closed_at", { withTimezone: true, mode: "date" }),
   },
   (table) => [
@@ -182,19 +198,21 @@ export const orders = pgTable(
       sql`(
         (${table.channel} = 'waiter' and ${table.tableId} is not null and ${table.createdByUserId} is not null)
         or (${table.channel} = 'catalog' and ${table.createdByUserId} is null)
+        or (${table.channel} = 'delivery' and ${table.tableId} is null and ${table.createdByUserId} is null)
       )`,
     ),
     check(
       "orders_status_check",
-      sql`${table.status} in ('pending', 'preparing', 'ready', 'closed', 'cancelled')`,
+      sql`${table.status} in ('pending', 'preparing', 'ready', 'out_for_delivery', 'closed', 'cancelled')`,
     ),
-    check("orders_channel_value_check", sql`${table.channel} in ('waiter', 'catalog')`),
+    check("orders_channel_value_check", sql`${table.channel} in ('waiter', 'catalog', 'delivery')`),
     check("orders_total_check", sql`${table.totalAmount} >= 0`),
     index("orders_establishment_status_idx").on(table.establishmentId, table.status),
     index("orders_active_status_idx")
       .on(table.establishmentId, table.status)
-      .where(sql`${table.status} in ('pending', 'preparing', 'ready')`),
+      .where(sql`${table.status} in ('pending', 'preparing', 'ready', 'out_for_delivery')`),
     index("orders_establishment_table_idx").on(table.establishmentId, table.tableId),
+    index("orders_establishment_updated_idx").on(table.establishmentId, table.updatedAt),
   ],
 );
 
@@ -280,6 +298,35 @@ export const cashMovements = pgTable(
     index("cash_movements_establishment_occurred_idx").on(
       table.establishmentId,
       table.occurredAt,
+    ),
+  ],
+);
+
+export const deliverySettings = pgTable(
+  "delivery_settings",
+  {
+    establishmentId: uuid("establishment_id")
+      .primaryKey()
+      .references(() => establishments.id, { onDelete: "cascade" }),
+    enabled: boolean("enabled").notNull().default(false),
+    fee: money("fee").notNull().default("0"),
+    paymentMethods: text("payment_methods")
+      .array()
+      .notNull()
+      .default(sql`'{cash,pix,credit_card,debit_card}'::text[]`),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (table) => [
+    check("delivery_settings_fee_check", sql`${table.fee} >= 0`),
+    check(
+      "delivery_settings_payment_methods_check",
+      sql`${table.paymentMethods} <@ array['cash', 'pix', 'credit_card', 'debit_card', 'meal_voucher']::text[]`,
     ),
   ],
 );

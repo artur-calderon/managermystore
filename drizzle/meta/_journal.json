@@ -22,6 +22,27 @@
       "when": 1794855600000,
       "tag": "0002_product_cost_price",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794859200000,
+      "tag": "0003_product_stock_quantity",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1794862800000,
+      "tag": "0004_orders_updated_at_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794866400000,
+      "tag": "0005_delivery_settings_and_status",
+      "breakpoints": true
     }
   ]
 }

@@ -4,14 +4,16 @@ import { eq } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { pool, db } from "@/lib/db";
-import { diningTables, establishmentMembers } from "@/lib/db/schema";
+import { diningTables, establishmentMembers, orderItems, orders } from "@/lib/db/schema";
 import { createCategory, createProduct, updateProduct } from "@/modules/catalog/service";
 import { addCashMovement } from "@/modules/cash/service";
+import { getDeliverySettings, updateDeliverySettings } from "@/modules/delivery/service";
 import {
   advanceOrder,
   cancelOrder,
   closeOrder,
   createCatalogOrder,
+  dispatchOrder,
   createWaiterOrder,
   getOrder,
   removeOrderItem,
@@ -201,6 +203,58 @@ describe("estabelecimento e pedidos", () => {
     const history = await getMembers(owner);
     expect(history.find((member) => member.id === waiterMember.id)?.deletedAt).toBeTruthy();
     expect((await getOrder(store.establishment.id, waiterOrder.id)).id).toBe(waiterOrder.id);
+  });
+
+  it("configura o delivery e segue o fluxo com saída para entrega", async () => {
+    const store = await openStore("entrega");
+    const owner = actor(store, "owner");
+
+    expect(await getDeliverySettings(store.establishment.id)).toMatchObject({ enabled: false });
+    await expect(
+      updateDeliverySettings(actor(store, "waiter"), { enabled: true, fee: "5", paymentMethods: ["pix"] }),
+    ).rejects.toMatchObject({ code: "forbidden" });
+    await expect(
+      updateDeliverySettings(owner, { enabled: true, fee: "5", paymentMethods: [] }),
+    ).rejects.toMatchObject({ code: "invalid_payment_methods" });
+    await expect(
+      updateDeliverySettings(owner, { enabled: true, fee: "-1", paymentMethods: ["pix"] }),
+    ).rejects.toMatchObject({ code: "invalid_fee" });
+
+    const saved = await updateDeliverySettings(owner, {
+      enabled: true,
+      fee: "7,50",
+      paymentMethods: ["pix", "cash", "bitcoin"],
+    });
+    expect(saved).toEqual({ enabled: true, fee: "7.50", paymentMethods: ["pix", "cash"] });
+
+    const category = await createCategory(owner, "Espetos");
+    const product = await createProduct(owner, { categoryId: category.id, name: "Picanha", price: "20" });
+    const [order] = await db
+      .insert(orders)
+      .values({ establishmentId: store.establishment.id, channel: "delivery", customerName: "Cliente" })
+      .returning();
+    await db.insert(orderItems).values({
+      establishmentId: store.establishment.id,
+      orderId: order.id,
+      productId: product.id,
+      productName: product.name,
+      quantity: 1,
+      unitPrice: product.price,
+    });
+
+    await advanceOrder(owner, order.id);
+    await expect(dispatchOrder(owner, order.id)).rejects.toMatchObject({ code: "invalid_transition" });
+    await advanceOrder(owner, order.id);
+    await expect(closeOrder(owner, order.id)).rejects.toMatchObject({ code: "invalid_transition" });
+    expect((await dispatchOrder(owner, order.id)).status).toBe("out_for_delivery");
+    expect((await closeOrder(owner, order.id)).status).toBe("closed");
+
+    const table = await createTable(owner, "Mesa 9");
+    const local = await createWaiterOrder(owner, { tableId: table.id, items: [{ productId: product.id, quantity: 1 }] });
+    await advanceOrder(owner, local.id);
+    await advanceOrder(owner, local.id);
+    await expect(dispatchOrder(owner, local.id)).rejects.toMatchObject({ code: "invalid_transition" });
+    expect((await closeOrder(owner, local.id)).status).toBe("closed");
   });
 
   it("transfere a propriedade uma vez sob concorrência e protege o último proprietário", async () => {

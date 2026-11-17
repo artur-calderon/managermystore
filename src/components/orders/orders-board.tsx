@@ -9,6 +9,7 @@ import {
   cancelOrderAction,
   closeOrderAction,
   createWaiterOrderAction,
+  dispatchOrderAction,
   removeItemAction,
   upsertItemAction,
 } from "@/modules/orders/actions";
@@ -23,8 +24,8 @@ export type BoardItem = {
 
 export type BoardOrder = {
   id: string;
-  status: "pending" | "preparing" | "ready" | "closed" | "cancelled";
-  channel: "waiter" | "catalog";
+  status: "pending" | "preparing" | "ready" | "out_for_delivery" | "closed" | "cancelled";
+  channel: "waiter" | "catalog" | "delivery";
   tableName: string | null;
   customerName: string | null;
   notes: string | null;
@@ -35,17 +36,20 @@ export type BoardOrder = {
 
 type Option = { id: string; name: string };
 
-const columns = [
+const baseColumns = [
   { status: "pending", title: "Novos" },
   { status: "preparing", title: "Em preparo" },
   { status: "ready", title: "Pronto" },
   { status: "closed", title: "Fechados" },
 ] as const;
 
+const deliveryColumn = { status: "out_for_delivery", title: "Saiu para entrega" } as const;
+
 const statusLabels: Record<BoardOrder["status"], string> = {
   pending: "Novo",
   preparing: "Em preparo",
   ready: "Pronto",
+  out_for_delivery: "Saiu para entrega",
   closed: "Fechado",
   cancelled: "Cancelado",
 };
@@ -61,6 +65,7 @@ export function OrdersBoard({
   canKitchen,
   canClose,
   canCancel,
+  deliveryEnabled = false,
 }: {
   orders: BoardOrder[];
   tables: Option[];
@@ -72,9 +77,15 @@ export function OrdersBoard({
   canKitchen: boolean;
   canClose: boolean;
   canCancel: boolean;
+  deliveryEnabled?: boolean;
 }) {
   const [view, setView] = useState<"kanban" | "list">("kanban");
-  const [channel, setChannel] = useState<"all" | "waiter" | "catalog">("all");
+  // A coluna de entrega só aparece para lojas com delivery (ou se ainda houver pedido nela).
+  const showDelivery = deliveryEnabled || orders.some((order) => order.status === "out_for_delivery");
+  const columns = showDelivery
+    ? [baseColumns[0], baseColumns[1], baseColumns[2], deliveryColumn, baseColumns[3]]
+    : [...baseColumns];
+  const [channel, setChannel] = useState<"all" | BoardOrder["channel"]>("all");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -104,6 +115,7 @@ export function OrdersBoard({
     all: orders.length,
     waiter: orders.filter((order) => order.channel === "waiter").length,
     catalog: orders.filter((order) => order.channel === "catalog").length,
+    delivery: orders.filter((order) => order.channel === "delivery").length,
   };
 
   return (
@@ -153,6 +165,11 @@ export function OrdersBoard({
           <FilterButton active={channel === "catalog"} onClick={() => setChannel("catalog")}>
             Catálogo ({counts.catalog})
           </FilterButton>
+          {showDelivery || counts.delivery > 0 ? (
+            <FilterButton active={channel === "delivery"} onClick={() => setChannel("delivery")}>
+              Delivery ({counts.delivery})
+            </FilterButton>
+          ) : null}
         </div>
         <div className="relative w-full sm:w-64">
           <Icon name="search" className="absolute top-2 left-2.5 text-[16px] text-outline" />
@@ -166,7 +183,11 @@ export function OrdersBoard({
       </div>
 
       {view === "kanban" ? (
-        <div className="grid grid-cols-1 items-start gap-5 md:grid-cols-2 xl:grid-cols-4">
+        <div
+          className={`grid grid-cols-1 items-start gap-5 md:grid-cols-2 ${
+            showDelivery ? "xl:grid-cols-3 2xl:grid-cols-5" : "xl:grid-cols-4"
+          }`}
+        >
           {columns.map((column) => {
             const columnOrders = filtered.filter((order) => order.status === column.status);
             return (
@@ -393,19 +414,25 @@ function CardAction({
   canClose: boolean;
   wide?: boolean;
 }) {
+  const delivery = order.channel === "delivery";
   const label =
     order.status === "pending" && canKitchen
       ? "Aceitar"
       : order.status === "preparing" && canKitchen
         ? "Pronto"
         : order.status === "ready" && canClose
-          ? "Fechar"
-          : null;
+          ? delivery
+            ? "Saiu para entrega"
+            : "Fechar"
+          : order.status === "out_for_delivery" && canClose
+            ? "Fechar"
+            : null;
 
   if (!label) return null;
 
-  const action = label === "Fechar" ? closeOrderAction : advanceOrderAction;
-  const primary = label === "Aceitar" || label === "Fechar";
+  const action =
+    label === "Fechar" ? closeOrderAction : label === "Saiu para entrega" ? dispatchOrderAction : advanceOrderAction;
+  const primary = label !== "Pronto";
 
   return (
     <BoundForm action={action}>
@@ -485,7 +512,7 @@ function viewButton(active: boolean) {
 function placeLabel(order: BoardOrder) {
   if (order.tableName) return order.tableName;
   if (order.customerName) return order.customerName;
-  return order.channel === "catalog" ? "Catálogo" : "Salão";
+  return order.channel === "catalog" ? "Catálogo" : order.channel === "delivery" ? "Delivery" : "Salão";
 }
 
 function summary(order: BoardOrder) {

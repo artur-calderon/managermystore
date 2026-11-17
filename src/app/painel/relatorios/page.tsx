@@ -3,7 +3,7 @@ import { connection } from "next/server";
 
 import { fieldClassName } from "@/components/shared/form";
 import { getReport } from "@/modules/reports/service";
-import { requireActor } from "@/server/context";
+import { requirePageActor } from "@/server/context";
 
 export default function ReportsPage({
   searchParams,
@@ -23,7 +23,7 @@ async function Reports({
   searchParams: Promise<{ from?: string; to?: string }>;
 }) {
   await connection();
-  const actor = await requireActor();
+  const actor = await requirePageActor("/painel/relatorios");
   const params = await searchParams;
   const today = new Intl.DateTimeFormat("en-CA", {
     timeZone: actor.timezone,

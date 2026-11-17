@@ -8,7 +8,7 @@ import {
   updateCategoryAction,
 } from "@/modules/catalog/actions";
 import { listCategories } from "@/modules/catalog/service";
-import { requireActor } from "@/server/context";
+import { requirePageActor } from "@/server/context";
 
 export default function CategoriesPage() {
   return (
@@ -20,7 +20,7 @@ export default function CategoriesPage() {
 
 async function Categories() {
   await connection();
-  const actor = await requireActor();
+  const actor = await requirePageActor("/painel/categorias");
   const categories = await listCategories(actor.establishmentId, true);
 
   return (

@@ -29,6 +29,10 @@ export const productSchema = z.object({
   description: z.string().trim().optional(),
   price: z.string().trim().min(1, "Informe o preço."),
   costPrice: z.string().trim().optional(),
+  stockQuantity: z.coerce
+    .number({ error: "Informe a quantidade." })
+    .int("A quantidade deve ser um número inteiro.")
+    .min(0, "A quantidade não pode ser negativa."),
 });
 
 export const cashSchema = z.object({
@@ -48,4 +52,19 @@ export const catalogOrderSchema = z.object({
       }),
     )
     .min(1, "Inclua ao menos um produto."),
+});
+
+export const waiterOrderSchema = z.object({
+  tableId: z.uuid("Escolha uma mesa."),
+  notes: z.string().trim().max(1000).optional(),
+  items: z
+    .array(
+      z.object({
+        productId: z.uuid(),
+        productName: z.string().trim().optional(),
+        quantity: z.number().int().positive(),
+        note: z.string().trim().max(200).optional(),
+      }),
+    )
+    .min(1, "Adicione ao menos um produto."),
 });

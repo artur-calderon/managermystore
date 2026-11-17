@@ -1,5 +1,5 @@
 import type { Role } from "@/lib/db/schema";
-import { can, type Action } from "@/server/authorization";
+import { can, canAccessPage, type Action } from "@/server/authorization";
 
 export const roleLabels: Record<Role, string> = {
   owner: "Proprietário",
@@ -30,6 +30,7 @@ const navigation: NavGroup[] = [
     items: [
       { href: "/painel", label: "Visão geral", icon: "grid_view", exact: true },
       { href: "/painel/pedidos", label: "Pedidos", icon: "receipt_long", action: "orders.view" },
+      { href: "/garcom", label: "Modo garçom", icon: "room_service", action: "orders.create" },
       { href: "/painel/cozinha", label: "Cozinha", icon: "soup_kitchen", action: "orders.kitchen" },
       {
         href: "/painel/mesas",
@@ -55,6 +56,7 @@ const navigation: NavGroup[] = [
     label: "Gestão",
     items: [
       { href: "/painel/caixa", label: "Caixa", icon: "point_of_sale", action: "cash.manage" },
+      { href: "/painel/delivery", label: "Delivery", icon: "two_wheeler", action: "delivery.manage" },
       { href: "/painel/relatorios", label: "Relatórios", icon: "bar_chart", action: "reports.view" },
       { href: "/painel/funcionarios", label: "Funcionários", icon: "badge", action: "members.manage" },
     ],
@@ -67,6 +69,9 @@ export function navigationFor(role: Role, badges: { orders?: string; tables?: st
       ...group,
       items: group.items
         .filter((item) => {
+          if (!canAccessPage(role, item.href)) {
+            return false;
+          }
           if (item.anyOf) {
             return item.anyOf.some((action) => can(role, action));
           }
@@ -89,6 +94,7 @@ export const pageTitles: Record<string, string> = {
   "/painel/produtos": "Produtos e cardápio",
   "/painel/categorias": "Categorias",
   "/painel/caixa": "Caixa",
+  "/painel/delivery": "Delivery",
   "/painel/relatorios": "Relatórios",
   "/painel/funcionarios": "Funcionários",
 };

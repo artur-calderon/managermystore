@@ -9,7 +9,7 @@ import {
 } from "@/modules/tenancy/actions";
 import { getMembers } from "@/modules/tenancy/service";
 import { can } from "@/server/authorization";
-import { requireActor } from "@/server/context";
+import { requirePageActor } from "@/server/context";
 
 export default function MembersPage() {
   return (
@@ -21,7 +21,7 @@ export default function MembersPage() {
 
 async function Members() {
   await connection();
-  const actor = await requireActor();
+  const actor = await requirePageActor("/painel/funcionarios");
   const members = await getMembers(actor);
 
   return (

@@ -1,9 +1,8 @@
 import type { Role } from "@/lib/db/schema";
-import { can } from "@/server/authorization";
+import { can, homePathFor } from "@/server/authorization";
 
 import { navigationFor } from "./navigation";
-import { Sidebar } from "./sidebar";
-import { Topbar } from "./topbar";
+import { DashboardFrame } from "./dashboard-frame";
 
 export function DashboardShell({
   role,
@@ -31,12 +30,16 @@ export function DashboardShell({
   });
 
   return (
-    <div className="min-h-screen bg-surface text-on-surface">
-      <Sidebar establishmentName={establishmentName} open={open} groups={groups} />
-      <div className="md:pl-64">
-        <Topbar userName={userName} role={role} canCreateOrder={can(role, "orders.create")} />
-        <main className="min-h-[calc(100vh-4rem)] px-space-lg py-space-lg md:pt-20">{children}</main>
-      </div>
-    </div>
+    <DashboardFrame
+      establishmentName={establishmentName}
+      open={open}
+      groups={groups}
+      userName={userName}
+      role={role}
+      canCreateOrder={can(role, "orders.create")}
+      newOrderHref={role === "waiter" ? homePathFor(role) : "/painel/pedidos"}
+    >
+      {children}
+    </DashboardFrame>
   );
 }

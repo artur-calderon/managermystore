@@ -111,7 +111,7 @@ export async function selectEstablishmentAction(formData: FormData) {
     sameSite: "lax",
     path: "/",
   });
-  redirect("/painel");
+  redirect(selected.role === "waiter" ? "/garcom" : "/painel");
 }
 
 export async function addMemberAction(_state: ActionState, formData: FormData): Promise<ActionState> {

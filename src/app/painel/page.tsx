@@ -1,3 +1,5 @@
+import { activeOrderStatuses } from "@/lib/db/schema";
+import { LiveRefresh } from "@/components/shared/live-refresh";
 import Link from "next/link";
 import { Suspense } from "react";
 import { connection } from "next/server";
@@ -10,15 +12,15 @@ import { listOrders } from "@/modules/orders/service";
 import { getReport, getSalesByChannel } from "@/modules/reports/service";
 import { listTables } from "@/modules/tables/service";
 import { can } from "@/server/authorization";
-import { requireActor } from "@/server/context";
+import { requirePageActor } from "@/server/context";
 import { formatMoney } from "@/server/money";
 
-const activeStatuses = ["pending", "preparing", "ready"] as const;
 
 const statusLabels = {
   pending: "Pendente",
   preparing: "Preparando",
   ready: "Pronto",
+  out_for_delivery: "Saiu para entrega",
   closed: "Fechado",
   cancelled: "Cancelado",
 } as const;
@@ -27,6 +29,7 @@ const statusTones = {
   pending: "border-amber-200 bg-amber-50 text-amber-900",
   preparing: "border-sky-200 bg-sky-50 text-sky-800",
   ready: "border-purple-200 bg-purple-50 text-purple-900",
+  out_for_delivery: "border-orange-200 bg-orange-50 text-orange-900",
   closed: "border-emerald-200 bg-emerald-50 text-emerald-800",
   cancelled: "border-transparent bg-error-container text-on-error-container",
 } as const;
@@ -34,6 +37,7 @@ const statusTones = {
 const channelLabels = {
   waiter: "Salão",
   catalog: "Catálogo",
+  delivery: "Delivery",
 } as const;
 
 export default function DashboardPage() {
@@ -46,7 +50,7 @@ export default function DashboardPage() {
 
 async function Dashboard() {
   await connection();
-  const actor = await requireActor();
+  const actor = await requirePageActor("/painel");
   const today = new Intl.DateTimeFormat("en-CA", {
     timeZone: actor.timezone,
     year: "numeric",
@@ -58,7 +62,7 @@ async function Dashboard() {
     can(actor.role, "reports.view") ? getReport(actor, today, today) : Promise.resolve(null),
     can(actor.role, "reports.view") ? getSalesByChannel(actor, today, today) : Promise.resolve(null),
     can(actor.role, "orders.view")
-      ? listOrders(actor.establishmentId, [...activeStatuses])
+      ? listOrders(actor.establishmentId, [...activeOrderStatuses])
       : Promise.resolve(null),
     can(actor.role, "tables.view") ? listTables(actor.establishmentId) : Promise.resolve(null),
   ]);
@@ -75,6 +79,7 @@ async function Dashboard() {
 
   return (
     <div className="flex flex-col gap-space-lg">
+      {can(actor.role, "orders.view") ? <LiveRefresh /> : null}
       <section className="flex flex-col justify-between gap-space-md xl:flex-row xl:items-center">
         <div>
           <h1 className="text-headline-md font-semibold tracking-tight text-on-surface">Visão geral</h1>

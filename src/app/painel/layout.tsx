@@ -1,13 +1,13 @@
 import { Suspense } from "react";
 
 import { DashboardShell } from "@/components/layout/dashboard-shell";
+import { activeOrderStatuses } from "@/lib/db/schema";
 import { listOrders } from "@/modules/orders/service";
 import { listTables } from "@/modules/tables/service";
 import { getEstablishmentForActor } from "@/modules/tenancy/service";
 import { can } from "@/server/authorization";
 import { requireActor } from "@/server/context";
 
-const activeStatuses = ["pending", "preparing", "ready"] as const;
 
 export default function PainelLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -23,7 +23,7 @@ async function PainelFrame({ children }: { children: React.ReactNode }) {
   const [tables, orders] = await Promise.all([
     can(actor.role, "tables.view") ? listTables(actor.establishmentId) : Promise.resolve(null),
     can(actor.role, "orders.view")
-      ? listOrders(actor.establishmentId, [...activeStatuses])
+      ? listOrders(actor.establishmentId, [...activeOrderStatuses])
       : Promise.resolve(null),
   ]);
   const visibleTables = tables?.filter((table) => !table.deletedAt) ?? null;

@@ -58,6 +58,7 @@ export async function createProductAction(_state: ActionState, formData: FormDat
     description: formData.get("description"),
     price: formData.get("price"),
     costPrice: formData.get("costPrice") || undefined,
+    stockQuantity: formData.get("stockQuantity"),
   });
 
   if (!parsed.success) {
@@ -82,6 +83,7 @@ export async function updateProductAction(_state: ActionState, formData: FormDat
       name: String(formData.get("name") ?? ""),
       price: String(formData.get("price") ?? ""),
       costPrice: String(formData.get("costPrice") ?? ""),
+      stockQuantity: String(formData.get("stockQuantity") ?? ""),
       description: String(formData.get("description") ?? ""),
       isAvailable: formData.get("isAvailable") === "on",
     });

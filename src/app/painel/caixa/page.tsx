@@ -6,10 +6,10 @@ import { Icon } from "@/components/ui/icon";
 import { addCashMovementAction } from "@/modules/cash/actions";
 import { listCashMovements } from "@/modules/cash/service";
 import { cancelOrderAction, closeOrderAction } from "@/modules/orders/actions";
-import { listOrders } from "@/modules/orders/service";
+import { listClosableOrders } from "@/modules/orders/service";
 import { getEstablishmentForActor } from "@/modules/tenancy/service";
 import { formatMoney, fromCents, toCents } from "@/server/money";
-import { requireActor } from "@/server/context";
+import { requirePageActor } from "@/server/context";
 
 export default function CashPage() {
   return (
@@ -21,10 +21,10 @@ export default function CashPage() {
 
 async function Cash() {
   await connection();
-  const actor = await requireActor();
+  const actor = await requirePageActor("/painel/caixa");
   const [establishment, ready, movements] = await Promise.all([
     getEstablishmentForActor(actor),
-    listOrders(actor.establishmentId, ["ready"]),
+    listClosableOrders(actor.establishmentId),
     listCashMovements(actor),
   ]);
 
@@ -268,5 +268,5 @@ function movementKind(movement: { orderId: string | null; type: string }) {
 function placeLabel(order: { tableName: string | null; customerName: string | null; channel: string | null }) {
   if (order.tableName) return order.tableName;
   if (order.customerName) return order.customerName;
-  return order.channel === "catalog" ? "Catálogo" : "Salão";
+  return order.channel === "catalog" ? "Catálogo" : order.channel === "delivery" ? "Delivery" : "Salão";
 }

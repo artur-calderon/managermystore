@@ -1,13 +1,14 @@
 import { Suspense } from "react";
 import { connection } from "next/server";
 
+import { LiveRefresh } from "@/components/shared/live-refresh";
 import { TablesFloor, type FloorOrder, type FloorTable } from "@/components/tables/tables-floor";
 import { listProducts } from "@/modules/catalog/service";
 import { listActiveOrders } from "@/modules/orders/service";
 import { listTables } from "@/modules/tables/service";
 import { getEstablishmentForActor } from "@/modules/tenancy/service";
 import { can } from "@/server/authorization";
-import { requireActor } from "@/server/context";
+import { requirePageActor } from "@/server/context";
 
 export default function TablesPage() {
   return (
@@ -19,7 +20,7 @@ export default function TablesPage() {
 
 async function Tables() {
   await connection();
-  const actor = await requireActor();
+  const actor = await requirePageActor("/painel/mesas");
   const [establishment, tables, products, active] = await Promise.all([
     getEstablishmentForActor(actor),
     listTables(actor.establishmentId),
@@ -57,7 +58,9 @@ async function Tables() {
     }));
 
   return (
-    <TablesFloor
+    <>
+      <LiveRefresh />
+      <TablesFloor
       tables={floor}
       products={products.map((product) => ({ id: product.id, name: product.name }))}
       open={establishment.status === "active"}
@@ -67,5 +70,6 @@ async function Tables() {
       canClose={can(actor.role, "orders.close")}
       canCancel={can(actor.role, "orders.cancel")}
     />
+    </>
   );
 }

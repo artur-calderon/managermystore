@@ -1,12 +1,11 @@
 import { and, eq, inArray, isNull } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { diningTables, environments, orders } from "@/lib/db/schema";
+import { activeOrderStatuses, diningTables, environments, orders } from "@/lib/db/schema";
 import type { Actor } from "@/modules/tenancy/service";
 import { assertCan } from "@/server/authorization";
 import { AppError } from "@/server/errors";
 
-const activeStatuses = ["pending", "preparing", "ready"] as const;
 
 export type TableInput = {
   name: string;
@@ -86,7 +85,7 @@ export async function listTables(establishmentId: string) {
       and(
         eq(orders.tableId, diningTables.id),
         eq(orders.establishmentId, diningTables.establishmentId),
-        inArray(orders.status, [...activeStatuses]),
+        inArray(orders.status, [...activeOrderStatuses]),
       ),
     )
     .where(eq(diningTables.establishmentId, establishmentId));

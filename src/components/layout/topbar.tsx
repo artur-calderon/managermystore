@@ -13,29 +13,48 @@ export function Topbar({
   userName,
   role,
   canCreateOrder,
+  newOrderHref,
+  menuOpen,
+  onToggleMenu,
 }: {
   userName: string;
   role: Role;
   canCreateOrder: boolean;
+  newOrderHref: string;
+  menuOpen: boolean;
+  onToggleMenu: () => void;
 }) {
   const pathname = usePathname();
   const title = pageTitles[pathname] ?? "Painel";
 
   return (
-    <header className="z-40 flex h-16 items-center justify-between gap-space-md border-b border-outline-variant/30 bg-surface-container-lowest px-space-lg md:fixed md:top-0 md:right-0 md:left-64">
+    <header className="fixed top-0 right-0 left-0 z-40 flex h-16 items-center justify-between gap-space-sm border-b border-outline-variant/30 bg-surface-container-lowest px-space-md sm:gap-space-md sm:px-space-lg lg:left-64">
       <div className="flex min-w-0 items-center gap-space-sm">
+        <button
+          type="button"
+          onClick={onToggleMenu}
+          aria-label={menuOpen ? "Fechar menu" : "Abrir menu"}
+          aria-expanded={menuOpen}
+          aria-controls="painel-menu"
+          className="-ml-1 flex size-10 shrink-0 items-center justify-center rounded-lg text-on-surface-variant transition-colors hover:bg-surface-container hover:text-on-surface lg:hidden"
+        >
+          <Icon name="menu" className="text-[24px]" />
+        </button>
         <span className="hidden text-body-compact text-outline sm:inline">Gestão comercial</span>
-        <Icon name="chevron_right" className="hidden text-[16px] text-outline sm:inline" />
+        <span className="hidden sm:inline-flex">
+          <Icon name="chevron_right" className="text-[16px] text-outline" />
+        </span>
         <span className="truncate text-body-medium font-semibold text-on-surface">{title}</span>
       </div>
-      <div className="flex items-center gap-space-md">
+      <div className="flex shrink-0 items-center gap-space-sm sm:gap-space-md">
         {canCreateOrder ? (
           <Link
-            href="/painel/pedidos"
-            className="inline-flex h-8 items-center gap-1.5 rounded bg-primary px-3 text-body-medium font-medium text-on-primary shadow-sm transition-colors hover:bg-primary-container"
+            href={newOrderHref}
+            aria-label="Novo pedido"
+            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded bg-primary px-2.5 text-body-medium font-medium text-on-primary shadow-sm transition-colors hover:bg-primary-container sm:h-8 sm:px-3"
           >
             <Icon name="add" />
-            Novo pedido
+            <span className="hidden sm:inline">Novo pedido</span>
           </Link>
         ) : null}
         <div className="flex items-center gap-space-sm border-l border-outline-variant/30 pl-space-sm">

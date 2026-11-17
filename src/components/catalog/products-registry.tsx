@@ -26,6 +26,7 @@ export type RegistryProduct = {
   costPrice: string | null;
   costPriceLabel: string | null;
   marginLabel: string | null;
+  stockQuantity: number;
   isAvailable: boolean;
   categoryId: string;
   categoryName: string;
@@ -211,6 +212,9 @@ export function ProductsRegistry({
                   <th className="px-3 py-2 text-right text-label-micro tracking-wider text-outline uppercase">
                     Custo / margem
                   </th>
+                  <th className="px-3 py-2 text-right text-label-micro tracking-wider text-outline uppercase">
+                    Qtd.
+                  </th>
                   <th className="px-3 py-2 text-label-micro tracking-wider text-outline uppercase">Canais</th>
                   <th className="px-3 py-2 text-center text-label-micro tracking-wider text-outline uppercase">
                     Status
@@ -225,7 +229,7 @@ export function ProductsRegistry({
               <tbody className="divide-y divide-surface-container-low">
                 {visible.length === 0 ? (
                   <tr>
-                    <td className="px-3.5 py-6 text-outline" colSpan={canManage ? 7 : 6}>
+                    <td className="px-3.5 py-6 text-outline" colSpan={canManage ? 8 : 7}>
                       {totalCount === 0 ? "Nenhum produto cadastrado." : "Nenhum produto encontrado."}
                     </td>
                   </tr>
@@ -280,6 +284,13 @@ export function ProductsRegistry({
                         ) : (
                           <span className="text-label-micro text-outline">—</span>
                         )}
+                      </td>
+                      <td
+                        className={`px-3 py-2.5 text-right text-metric-table font-semibold ${
+                          product.stockQuantity === 0 ? "text-error" : "text-on-surface"
+                        }`}
+                      >
+                        {product.stockQuantity}
                       </td>
                       <td className="px-3 py-2.5">
                         <div className="flex max-w-[150px] flex-wrap items-center gap-1">
@@ -490,6 +501,23 @@ export function ProductsRegistry({
                         </div>
                       </label>
                     </div>
+
+                    <label className="grid gap-1 text-label-regular font-medium text-on-surface">
+                      <span>
+                        Quantidade <span className="text-primary">*</span>
+                      </span>
+                      <input
+                        className={fieldClassName}
+                        name="stockQuantity"
+                        type="number"
+                        inputMode="numeric"
+                        min={0}
+                        step={1}
+                        placeholder="0"
+                        defaultValue={editing?.stockQuantity ?? ""}
+                        required
+                      />
+                    </label>
 
                     <label className="grid gap-1 text-label-regular font-medium text-on-surface">
                       Descrição do cardápio

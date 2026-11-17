@@ -82,6 +82,7 @@ export async function listProducts(establishmentId: string, availableOnly = fals
       description: products.description,
       price: products.price,
       costPrice: products.costPrice,
+      stockQuantity: products.stockQuantity,
       isAvailable: products.isAvailable,
       deletedAt: products.deletedAt,
     })
@@ -112,6 +113,7 @@ export async function createProduct(
     description?: string;
     price: string;
     costPrice?: string;
+    stockQuantity?: number | string;
   },
 ) {
   assertCan(actor.role, "catalog.manage");
@@ -127,6 +129,7 @@ export async function createProduct(
       description: input.description?.trim() || null,
       price,
       costPrice: normalizeOptionalPrice(input.costPrice),
+      stockQuantity: normalizeQuantity(input.stockQuantity ?? 0),
     })
     .returning();
 
@@ -142,6 +145,7 @@ export async function updateProduct(
     description?: string;
     price?: string;
     costPrice?: string | null;
+    stockQuantity?: number | string;
     isAvailable?: boolean;
   },
 ) {
@@ -160,6 +164,7 @@ export async function updateProduct(
       price: input.price === undefined ? undefined : normalizePrice(input.price),
       costPrice:
         input.costPrice === undefined ? undefined : normalizeOptionalPrice(input.costPrice ?? undefined),
+      stockQuantity: input.stockQuantity === undefined ? undefined : normalizeQuantity(input.stockQuantity),
       isAvailable: input.isAvailable,
     })
     .where(
@@ -230,4 +235,12 @@ function normalizeOptionalPrice(value?: string) {
     return null;
   }
   return normalizePrice(value);
+}
+
+function normalizeQuantity(value: number | string) {
+  const quantity = typeof value === "number" ? value : Number(value.trim());
+  if (!Number.isInteger(quantity) || quantity < 0) {
+    throw new AppError("invalid_quantity", "Informe uma quantidade inteira maior ou igual a zero.");
+  }
+  return quantity;
 }

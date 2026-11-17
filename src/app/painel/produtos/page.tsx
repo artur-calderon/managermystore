@@ -8,7 +8,7 @@ import {
 } from "@/components/catalog/products-registry";
 import { listCategories, listProducts } from "@/modules/catalog/service";
 import { can } from "@/server/authorization";
-import { requireActor } from "@/server/context";
+import { requirePageActor } from "@/server/context";
 import { formatMoney } from "@/server/money";
 
 export default function ProductsPage() {
@@ -21,7 +21,7 @@ export default function ProductsPage() {
 
 async function Products() {
   await connection();
-  const actor = await requireActor();
+  const actor = await requirePageActor("/painel/produtos");
   const [categories, products] = await Promise.all([
     listCategories(actor.establishmentId),
     listProducts(actor.establishmentId),
@@ -44,6 +44,7 @@ async function Products() {
       costPrice: product.costPrice,
       costPriceLabel: product.costPrice === null ? null : formatMoney(product.costPrice),
       marginLabel,
+      stockQuantity: product.stockQuantity,
       isAvailable: product.isAvailable,
       categoryId: product.categoryId,
       categoryName: product.categoryName,

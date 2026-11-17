@@ -9,7 +9,7 @@ import {
 } from "@/components/tables/tables-registry";
 import { listEnvironments, listTables } from "@/modules/tables/service";
 import { can } from "@/server/authorization";
-import { requireActor } from "@/server/context";
+import { requirePageActor } from "@/server/context";
 
 export default function TableRegistryPage() {
   return (
@@ -21,7 +21,7 @@ export default function TableRegistryPage() {
 
 async function Registry() {
   await connection();
-  const actor = await requireActor();
+  const actor = await requirePageActor("/painel/mesas/cadastro");
   if (!can(actor.role, "tables.manage")) {
     redirect("/painel/mesas");
   }

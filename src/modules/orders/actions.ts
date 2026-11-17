@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
-import { catalogOrderSchema } from "@/lib/validations/forms";
+import { catalogOrderSchema, waiterOrderSchema } from "@/lib/validations/forms";
 import { requireActor } from "@/server/context";
 import { actionError, type ActionState } from "@/server/action";
 
@@ -12,6 +12,7 @@ import {
   closeOrder,
   createCatalogOrder,
   createWaiterOrder,
+  dispatchOrder,
   removeOrderItem,
   upsertOrderItem,
 } from "./service";
@@ -86,6 +87,22 @@ export async function advanceOrderAction(
   }
 }
 
+export async function dispatchOrderAction(
+  _state: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  try {
+    const actor = await requireActor();
+    await dispatchOrder(actor, String(formData.get("orderId")));
+    revalidatePath("/painel");
+    revalidatePath("/painel/pedidos");
+    revalidatePath("/painel/caixa");
+    return { success: "Pedido saiu para entrega." };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
 export async function cancelOrderAction(
   _state: ActionState,
   formData: FormData,
@@ -140,5 +157,37 @@ export async function placeCatalogOrderAction(input: {
     return { id: order.id, totalAmount: order.totalAmount };
   } catch (error) {
     return actionError(error);
+  }
+}
+
+export async function sendWaiterOrderAction(input: {
+  tableId: string;
+  notes?: string;
+  items: { productId: string; productName?: string; quantity: number; note?: string }[];
+}): Promise<{ error?: string; success?: string; orderId?: string }> {
+  const parsed = waiterOrderSchema.safeParse(input);
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Dados inválidos." };
+  }
+
+  try {
+    const actor = await requireActor();
+    const itemNotes = parsed.data.items
+      .filter((item) => item.note)
+      .map((item) => `${item.productName ?? "Item"}: ${item.note}`);
+    const notes = [parsed.data.notes, ...itemNotes].filter(Boolean).join("\n");
+    const order = await createWaiterOrder(actor, {
+      tableId: parsed.data.tableId,
+      notes,
+      items: parsed.data.items.map(({ productId, quantity }) => ({ productId, quantity })),
+    });
+    revalidatePath("/painel");
+    revalidatePath("/painel/pedidos");
+    revalidatePath("/painel/mesas");
+    revalidatePath("/painel/cozinha");
+    revalidatePath("/garcom");
+    return { success: "Pedido enviado para a cozinha.", orderId: order.id };
+  } catch (error) {
+    return actionError(error) ?? { error: "Não foi possível enviar o pedido." };
   }
 }
