@@ -261,10 +261,45 @@ export async function getEstablishmentForActor(actor: Actor) {
   return establishment;
 }
 
+/**
+ * Loja para o cardápio público: aparece mesmo fechada ou suspensa (com aviso de fechada).
+ * Só lojas removidas não existem.
+ */
+export async function getStorefront(slug: string) {
+  const establishment = await findEstablishmentBySlug(db, slug);
+  if (!establishment || establishment.deletedAt) {
+    return null;
+  }
+  return { ...establishment, acceptingOrders: isAcceptingOrders(establishment) };
+}
+
+export function isAcceptingOrders(establishment: { status: string; isOpen: boolean }) {
+  return establishment.status === "active" && establishment.isOpen;
+}
+
+export async function setEstablishmentOpen(actor: Actor, isOpen: boolean) {
+  assertCan(actor.role, "establishment.update");
+
+  const [establishment] = await db
+    .update(establishments)
+    .set({ isOpen, updatedAt: new Date() })
+    .where(and(eq(establishments.id, actor.establishmentId), isNull(establishments.deletedAt)))
+    .returning();
+
+  if (!establishment) {
+    throw new AppError("not_found", "Estabelecimento não encontrado.");
+  }
+
+  return establishment;
+}
+
 export async function getPublicEstablishment(slug: string) {
   const establishment = await findEstablishmentBySlug(db, slug);
   if (!establishment || establishment.deletedAt || establishment.status !== "active") {
     throw new AppError("not_found", "Estabelecimento não encontrado.");
+  }
+  if (!establishment.isOpen) {
+    throw new AppError("store_closed", "A loja está fechada no momento.");
   }
   return establishment;
 }

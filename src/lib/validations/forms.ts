@@ -41,19 +41,6 @@ export const cashSchema = z.object({
   description: z.string().trim().optional(),
 });
 
-export const catalogOrderSchema = z.object({
-  customerName: z.string().trim().optional(),
-  notes: z.string().trim().optional(),
-  items: z
-    .array(
-      z.object({
-        productId: z.uuid(),
-        quantity: z.number().int().positive(),
-      }),
-    )
-    .min(1, "Inclua ao menos um produto."),
-});
-
 export const waiterOrderSchema = z.object({
   tableId: z.uuid("Escolha uma mesa."),
   notes: z.string().trim().max(1000).optional(),
@@ -67,4 +54,46 @@ export const waiterOrderSchema = z.object({
       }),
     )
     .min(1, "Adicione ao menos um produto."),
+});
+
+const phone = z
+  .string()
+  .trim()
+  .transform((value) => value.replace(/\D/g, ""))
+  .refine((value) => value.length >= 10 && value.length <= 11, "Informe um telefone com DDD.");
+
+export const customerRegisterSchema = z.object({
+  name: z.string().trim().min(2, "Informe seu nome.").max(80),
+  email: z.email("Informe um e-mail válido.").trim().max(160),
+  phone,
+  password: z.string().min(8, "A senha precisa ter pelo menos 8 caracteres.").max(128),
+});
+
+export const customerLoginSchema = z.object({
+  email: z.email("Informe um e-mail válido.").trim(),
+  password: z.string().min(1, "Informe sua senha.").max(128),
+});
+
+export const addressSchema = z.object({
+  label: z.string().trim().max(40).optional(),
+  street: z.string().trim().min(2, "Informe a rua.").max(120),
+  number: z.string().trim().min(1, "Informe o número.").max(20),
+  complement: z.string().trim().max(80).optional(),
+  neighborhood: z.string().trim().min(2, "Informe o bairro.").max(80),
+  city: z.string().trim().min(2, "Informe a cidade.").max(80),
+  postalCode: z.string().trim().max(9).optional(),
+  reference: z.string().trim().max(120).optional(),
+});
+
+export const deliveryOrderSchema = z.object({
+  addressId: z.uuid("Escolha um endereço de entrega."),
+  paymentMethod: z.enum(["cash", "pix", "credit_card", "debit_card", "meal_voucher"], {
+    error: "Escolha a forma de pagamento.",
+  }),
+  changeFor: z.string().trim().max(12).optional(),
+  notes: z.string().trim().max(500).optional(),
+  items: z
+    .array(z.object({ productId: z.uuid(), quantity: z.number().int().min(1).max(99) }))
+    .min(1, "Seu carrinho está vazio.")
+    .max(50, "Pedido com itens demais."),
 });

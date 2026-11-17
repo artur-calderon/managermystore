@@ -12,6 +12,7 @@ import {
   type PaymentMethod,
 } from "@/lib/payment-methods";
 import { updateDeliverySettingsAction } from "@/modules/delivery/actions";
+import { setStoreOpenAction } from "@/modules/tenancy/actions";
 
 type Settings = { enabled: boolean; fee: string; paymentMethods: PaymentMethod[] };
 
@@ -23,7 +24,17 @@ const flow = [
   { icon: "task_alt", label: "Fechado" },
 ];
 
-export function DeliverySettingsForm({ settings, storeHref }: { settings: Settings; storeHref: string }) {
+export function DeliverySettingsForm({
+  settings,
+  storeHref,
+  storeOpen,
+  suspended,
+}: {
+  settings: Settings;
+  storeHref: string;
+  storeOpen: boolean;
+  suspended: boolean;
+}) {
   const [enabled, setEnabled] = useState(settings.enabled);
   const [fee, setFee] = useState(settings.fee.replace(".", ","));
   const [methods, setMethods] = useState<PaymentMethod[]>(settings.paymentMethods);
@@ -62,6 +73,8 @@ export function DeliverySettingsForm({ settings, storeHref }: { settings: Settin
           Ver cardápio digital
         </Link>
       </div>
+
+      <StoreOpenCard open={storeOpen} suspended={suspended} />
 
       <div className="grid grid-cols-1 items-start gap-space-lg lg:grid-cols-12">
         <BoundForm action={updateDeliverySettingsAction} className="flex flex-col gap-space-md lg:col-span-7">
@@ -197,5 +210,55 @@ export function DeliverySettingsForm({ settings, storeHref }: { settings: Settin
         </aside>
       </div>
     </div>
+  );
+}
+
+function StoreOpenCard({ open, suspended }: { open: boolean; suspended: boolean }) {
+  const accepting = open && !suspended;
+
+  return (
+    <section
+      className={`flex flex-col gap-space-sm rounded-xl p-space-lg shadow-sm sm:flex-row sm:items-center sm:justify-between ${
+        accepting ? "bg-emerald-50" : "bg-surface-container-high"
+      }`}
+    >
+      <div className="flex items-start gap-3">
+        <span
+          className={`flex size-10 shrink-0 items-center justify-center rounded-lg ${
+            accepting ? "bg-emerald-600 text-white" : "bg-outline text-white"
+          }`}
+        >
+          <Icon name={accepting ? "storefront" : "door_front"} className="text-[22px]" />
+        </span>
+        <div>
+          <p className="text-body-medium font-semibold text-on-surface">
+            {suspended ? "Loja suspensa pela plataforma" : open ? "Loja aberta agora" : "Loja fechada agora"}
+          </p>
+          <p className="mt-0.5 text-label-regular text-on-surface-variant">
+            {suspended
+              ? "O cardápio digital mostra a loja como fechada até a suspensão ser removida."
+              : open
+                ? "O cardápio digital recebe pedidos normalmente."
+                : "O cardápio digital continua visível, com o aviso de fechado e os produtos desabilitados."}
+          </p>
+        </div>
+      </div>
+      {!suspended ? (
+        <BoundForm action={setStoreOpenAction} className="grid shrink-0 justify-items-start gap-1 sm:justify-items-end">
+          <input type="hidden" name="isOpen" value={open ? "false" : "true"} />
+          <button
+            type="submit"
+            className={`inline-flex h-10 items-center gap-1.5 rounded-lg px-4 text-body-medium font-medium shadow-sm transition-colors ${
+              open
+                ? "bg-surface-container-lowest text-on-surface hover:bg-surface-container"
+                : "bg-primary text-on-primary hover:bg-primary-container"
+            }`}
+          >
+            <Icon name={open ? "lock" : "lock_open"} />
+            {open ? "Fechar loja" : "Abrir loja"}
+          </button>
+        </BoundForm>
+      ) : null}
+    </section>
   );
 }

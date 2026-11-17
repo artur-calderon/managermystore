@@ -14,6 +14,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
+import { customers } from "./customers";
 import { establishmentMembers, establishments } from "./tenancy";
 
 const money = (name: string) => numeric(name, { precision: 12, scale: 2 });
@@ -171,6 +172,13 @@ export const orders = pgTable(
     createdByUserId: uuid("created_by_user_id"),
     customerName: text("customer_name"),
     notes: text("notes"),
+    // Delivery: cliente, cópia do endereço/telefone no momento do pedido, taxa e pagamento.
+    customerId: uuid("customer_id"),
+    customerPhone: text("customer_phone"),
+    deliveryAddress: text("delivery_address"),
+    deliveryFee: money("delivery_fee").notNull().default("0"),
+    paymentMethod: text("payment_method"),
+    changeFor: money("change_for"),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
       .notNull()
       .defaultNow(),
@@ -198,7 +206,10 @@ export const orders = pgTable(
       sql`(
         (${table.channel} = 'waiter' and ${table.tableId} is not null and ${table.createdByUserId} is not null)
         or (${table.channel} = 'catalog' and ${table.createdByUserId} is null)
-        or (${table.channel} = 'delivery' and ${table.tableId} is null and ${table.createdByUserId} is null)
+        or (
+          ${table.channel} = 'delivery' and ${table.tableId} is null and ${table.createdByUserId} is null
+          and ${table.customerId} is not null and ${table.deliveryAddress} is not null and ${table.paymentMethod} is not null
+        )
       )`,
     ),
     check(
@@ -207,6 +218,14 @@ export const orders = pgTable(
     ),
     check("orders_channel_value_check", sql`${table.channel} in ('waiter', 'catalog', 'delivery')`),
     check("orders_total_check", sql`${table.totalAmount} >= 0`),
+    check("orders_delivery_fee_check", sql`${table.deliveryFee} >= 0`),
+    check("orders_change_for_check", sql`${table.changeFor} is null or ${table.changeFor} > 0`),
+    foreignKey({
+      columns: [table.establishmentId, table.customerId],
+      foreignColumns: [customers.establishmentId, customers.id],
+      name: "orders_customer_establishment_fk",
+    }).onDelete("restrict"),
+    index("orders_customer_idx").on(table.customerId, table.updatedAt),
     index("orders_establishment_status_idx").on(table.establishmentId, table.status),
     index("orders_active_status_idx")
       .on(table.establishmentId, table.status)

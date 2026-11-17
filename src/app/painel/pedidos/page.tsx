@@ -63,6 +63,16 @@ function toBoardOrder(order: Awaited<ReturnType<typeof listActiveOrders>>[number
     notes: order.notes,
     totalAmount: order.totalAmount,
     createdAt: order.createdAt.toISOString(),
+    delivery:
+      order.channel === "delivery"
+        ? {
+            phone: order.customerPhone,
+            address: order.deliveryAddress,
+            fee: order.deliveryFee,
+            paymentMethod: order.paymentMethod,
+            changeFor: order.changeFor,
+          }
+        : null,
     items: order.items.map((item) => ({
       id: item.id,
       productName: item.productName,

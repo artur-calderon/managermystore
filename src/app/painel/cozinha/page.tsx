@@ -31,11 +31,12 @@ async function Kitchen() {
       {orders.map((order) => (
         <article key={order.id} className="grid gap-2 border p-3">
           <h2>
-            {order.id.slice(0, 8)} · {order.tableName ?? "Catálogo"} · {order.status}
+            {order.id.slice(0, 8)} ·{" "}
+            {order.tableName ?? (order.channel === "delivery" ? "Delivery" : "Catálogo")} · {order.status}
           </h2>
           <p>{order.createdAt.toLocaleString("pt-BR")}</p>
           {order.customerName ? <p>Cliente: {order.customerName}</p> : null}
-          {order.notes ? <p>Obs.: {order.notes}</p> : null}
+          {order.notes ? <p className="whitespace-pre-line">Obs.: {order.notes}</p> : null}
           <ul>
             {order.items.map((item) => (
               <li key={item.id}>

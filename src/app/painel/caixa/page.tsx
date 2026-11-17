@@ -6,6 +6,7 @@ import { Icon } from "@/components/ui/icon";
 import { addCashMovementAction } from "@/modules/cash/actions";
 import { listCashMovements } from "@/modules/cash/service";
 import { cancelOrderAction, closeOrderAction } from "@/modules/orders/actions";
+import { isPaymentMethod, paymentMethodLabels } from "@/lib/payment-methods";
 import { listClosableOrders } from "@/modules/orders/service";
 import { getEstablishmentForActor } from "@/modules/tenancy/service";
 import { formatMoney, fromCents, toCents } from "@/server/money";
@@ -170,6 +171,13 @@ async function Cash() {
                       <div>
                         <p className="font-mono text-label-micro text-outline">#{order.id.slice(0, 8)}</p>
                         <p className="text-body-compact font-medium text-on-surface">{placeLabel(order)}</p>
+                        {order.channel === "delivery" ? (
+                          <p className="text-label-regular text-on-surface-variant">
+                            Delivery · {order.paymentMethod && isPaymentMethod(order.paymentMethod)
+                              ? paymentMethodLabels[order.paymentMethod]
+                              : "pagamento não informado"}
+                          </p>
+                        ) : null}
                       </div>
                       <span className="text-body-compact font-semibold">{formatMoney(order.totalAmount)}</span>
                     </div>

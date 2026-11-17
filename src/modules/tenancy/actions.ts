@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
@@ -13,6 +14,7 @@ import {
   getMemberships,
   registerEstablishment,
   removeMember,
+  setEstablishmentOpen,
   transferOwnership,
   updateEstablishment,
 } from "./service";
@@ -159,6 +161,19 @@ export async function transferOwnershipAction(
     const actor = await requireActor();
     await transferOwnership(actor, String(formData.get("memberId")));
     return { success: "Propriedade transferida." };
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function setStoreOpenAction(_state: ActionState, formData: FormData): Promise<ActionState> {
+  try {
+    const actor = await requireActor();
+    const open = formData.get("isOpen") === "true";
+    await setEstablishmentOpen(actor, open);
+    revalidatePath("/painel", "layout");
+    revalidatePath(`/loja/${actor.slug}`);
+    return { success: open ? "Loja aberta: o cardápio digital está recebendo pedidos." : "Loja fechada: o cardápio mostra o aviso de fechado." };
   } catch (error) {
     return actionError(error);
   }

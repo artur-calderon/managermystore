@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  boolean,
   check,
   index,
   pgTable,
@@ -22,6 +23,8 @@ export const establishments = pgTable(
     name: text("name").notNull(),
     slug: text("slug").notNull().unique(),
     status: text("status").notNull().default("active"),
+    // Aberto/fechado agora, controlado pelo lojista. `status` é a suspensão pela plataforma.
+    isOpen: boolean("is_open").notNull().default(true),
     timezone: text("timezone").notNull().default("America/Sao_Paulo"),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
       .notNull()

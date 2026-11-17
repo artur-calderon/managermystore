@@ -4,18 +4,28 @@ import { eq } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { pool, db } from "@/lib/db";
-import { diningTables, establishmentMembers, orderItems, orders } from "@/lib/db/schema";
+import { diningTables, establishmentMembers } from "@/lib/db/schema";
 import { createCategory, createProduct, updateProduct } from "@/modules/catalog/service";
 import { addCashMovement } from "@/modules/cash/service";
+import {
+  authenticateCustomer,
+  createAddress,
+  createCustomerSession,
+  deleteCustomerSession,
+  findCustomerBySession,
+  registerCustomer,
+} from "@/modules/customers/service";
 import { getDeliverySettings, updateDeliverySettings } from "@/modules/delivery/service";
 import {
   advanceOrder,
   cancelOrder,
   closeOrder,
   createCatalogOrder,
+  createDeliveryOrder,
   dispatchOrder,
   createWaiterOrder,
   getOrder,
+  listCustomerOrders,
   removeOrderItem,
   upsertOrderItem,
 } from "@/modules/orders/service";
@@ -26,6 +36,7 @@ import {
   getMembers,
   registerEstablishment,
   removeMember,
+  setEstablishmentOpen,
   setUserDisabled,
   transferOwnership,
 } from "@/modules/tenancy/service";
@@ -229,18 +240,75 @@ describe("estabelecimento e pedidos", () => {
 
     const category = await createCategory(owner, "Espetos");
     const product = await createProduct(owner, { categoryId: category.id, name: "Picanha", price: "20" });
-    const [order] = await db
-      .insert(orders)
-      .values({ establishmentId: store.establishment.id, channel: "delivery", customerName: "Cliente" })
-      .returning();
-    await db.insert(orderItems).values({
-      establishmentId: store.establishment.id,
-      orderId: order.id,
-      productId: product.id,
-      productName: product.name,
-      quantity: 1,
-      unitPrice: product.price,
+    const customer = await registerCustomer(store.establishment.id, {
+      name: "Cliente Delivery",
+      email: uniqueEmail("cliente"),
+      phone: "(11) 91234-5678",
+      password: "senha-cliente-1",
     });
+    expect(customer.phone).toBe("11912345678");
+    const address = await createAddress(customer, {
+      street: "Rua das Flores",
+      number: "10",
+      neighborhood: "Centro",
+      city: "São Paulo",
+      reference: "Portão azul",
+    });
+    const items = [{ productId: product.id, quantity: 2 }];
+
+    // Loja fechada recusa; pagamento não aceito recusa; troco menor que o total recusa.
+    await setEstablishmentOpen(owner, false);
+    await expect(
+      createDeliveryOrder(customer, { addressId: address.id, paymentMethod: "pix", items }),
+    ).rejects.toMatchObject({ code: "store_closed" });
+    await setEstablishmentOpen(owner, true);
+    await expect(
+      createDeliveryOrder(customer, { addressId: address.id, paymentMethod: "credit_card", items }),
+    ).rejects.toMatchObject({ code: "invalid_payment_method" });
+    await expect(
+      createDeliveryOrder(customer, { addressId: address.id, paymentMethod: "cash", changeFor: "10", items }),
+    ).rejects.toMatchObject({ code: "invalid_change" });
+
+    // Endereço de outro cliente não pode ser usado.
+    const intruder = await registerCustomer(store.establishment.id, {
+      name: "Outro",
+      email: uniqueEmail("outro"),
+      phone: "11999998888",
+      password: "senha-cliente-2",
+    });
+    await expect(
+      createDeliveryOrder(intruder, { addressId: address.id, paymentMethod: "pix", items }),
+    ).rejects.toMatchObject({ code: "not_found" });
+
+    const placed = await createDeliveryOrder(customer, {
+      addressId: address.id,
+      paymentMethod: "cash",
+      changeFor: "100",
+      notes: "Sem cebola",
+      items,
+    });
+    // 2 x R$ 20,00 + taxa de R$ 7,50
+    expect(placed.totalAmount).toBe("47.50");
+    const order = await getOrder(store.establishment.id, placed.id);
+    expect(order).toMatchObject({
+      channel: "delivery",
+      status: "pending",
+      customerName: "Cliente Delivery",
+      customerPhone: "11912345678",
+      deliveryFee: "7.50",
+      paymentMethod: "cash",
+      changeFor: "100.00",
+    });
+    expect(order.deliveryAddress).toContain("Rua das Flores, 10");
+    expect((await listCustomerOrders(customer)).map((item) => item.id)).toEqual([placed.id]);
+    expect(await listCustomerOrders(intruder)).toEqual([]);
+
+    // Limite de pedidos aguardando a loja por cliente.
+    await createDeliveryOrder(customer, { addressId: address.id, paymentMethod: "pix", items });
+    await createDeliveryOrder(customer, { addressId: address.id, paymentMethod: "pix", items });
+    await expect(
+      createDeliveryOrder(customer, { addressId: address.id, paymentMethod: "pix", items }),
+    ).rejects.toMatchObject({ code: "too_many_pending" });
 
     await advanceOrder(owner, order.id);
     await expect(dispatchOrder(owner, order.id)).rejects.toMatchObject({ code: "invalid_transition" });
@@ -248,6 +316,7 @@ describe("estabelecimento e pedidos", () => {
     await expect(closeOrder(owner, order.id)).rejects.toMatchObject({ code: "invalid_transition" });
     expect((await dispatchOrder(owner, order.id)).status).toBe("out_for_delivery");
     expect((await closeOrder(owner, order.id)).status).toBe("closed");
+    expect((await getOrder(store.establishment.id, order.id)).totalAmount).toBe("47.50");
 
     const table = await createTable(owner, "Mesa 9");
     const local = await createWaiterOrder(owner, { tableId: table.id, items: [{ productId: product.id, quantity: 1 }] });
@@ -255,6 +324,34 @@ describe("estabelecimento e pedidos", () => {
     await advanceOrder(owner, local.id);
     await expect(dispatchOrder(owner, local.id)).rejects.toMatchObject({ code: "invalid_transition" });
     expect((await closeOrder(owner, local.id)).status).toBe("closed");
+  });
+
+  it("autentica clientes por loja com sessão própria", async () => {
+    const first = await openStore("cliente-a");
+    const second = await openStore("cliente-b");
+    const email = uniqueEmail("comprador");
+    const customer = await registerCustomer(first.establishment.id, {
+      name: "Comprador",
+      email,
+      phone: "11912345678",
+      password: "senha-cliente-1",
+    });
+
+    await expect(
+      registerCustomer(first.establishment.id, { name: "Dup", email: email.toUpperCase(), phone: "11912345678", password: "outra-senha-1" }),
+    ).rejects.toMatchObject({ code: "email_taken" });
+    // O mesmo e-mail pode ter conta em outra loja.
+    await registerCustomer(second.establishment.id, { name: "Outro", email, phone: "11912345678", password: "senha-b-12345" });
+
+    expect(await authenticateCustomer(first.establishment.id, email, "errada")).toBeNull();
+    expect((await authenticateCustomer(first.establishment.id, email.toUpperCase(), "senha-cliente-1"))?.id).toBe(customer.id);
+
+    const { token } = await createCustomerSession(customer.id);
+    expect((await findCustomerBySession(first.establishment.id, token))?.id).toBe(customer.id);
+    // Sessão de uma loja não vale em outra.
+    expect(await findCustomerBySession(second.establishment.id, token)).toBeNull();
+    await deleteCustomerSession(token);
+    expect(await findCustomerBySession(first.establishment.id, token)).toBeNull();
   });
 
   it("transfere a propriedade uma vez sob concorrência e protege o último proprietário", async () => {

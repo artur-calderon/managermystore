@@ -13,6 +13,7 @@ import {
   removeItemAction,
   upsertItemAction,
 } from "@/modules/orders/actions";
+import { isPaymentMethod, paymentMethodIcons, paymentMethodLabels } from "@/lib/payment-methods";
 import { formatMoney } from "@/server/money";
 
 export type BoardItem = {
@@ -31,7 +32,16 @@ export type BoardOrder = {
   notes: string | null;
   totalAmount: string;
   createdAt: string;
+  delivery: BoardDelivery | null;
   items: BoardItem[];
+};
+
+export type BoardDelivery = {
+  phone: string | null;
+  address: string | null;
+  fee: string;
+  paymentMethod: string | null;
+  changeFor: string | null;
 };
 
 type Option = { id: string; name: string };
@@ -219,6 +229,7 @@ export function OrdersBoard({
                       <p className="text-body-compact leading-relaxed text-on-surface-variant">
                         {summary(order) || "Sem itens"}
                       </p>
+                      {order.delivery ? <DeliveryChips delivery={order.delivery} total={order.totalAmount} /> : null}
                       <div
                         className="flex items-center justify-between border-t border-outline-variant/20 pt-1"
                         onClick={(event) => event.stopPropagation()}
@@ -332,7 +343,16 @@ export function OrdersBoard({
           onClose={() => setSelectedId(null)}
         >
           <div className="flex flex-col gap-3">
-            {selected.notes ? <p className="text-body-compact text-on-surface-variant">Obs.: {selected.notes}</p> : null}
+            {selected.delivery ? (
+              <DeliveryDetails
+                customerName={selected.customerName}
+                delivery={selected.delivery}
+                total={selected.totalAmount}
+              />
+            ) : null}
+            {selected.notes ? (
+              <p className="text-body-compact whitespace-pre-line text-on-surface-variant">Obs.: {selected.notes}</p>
+            ) : null}
             <ul className="divide-y divide-surface-container-low rounded-lg border border-surface-container-low">
               {selected.items.length === 0 ? (
                 <li className="px-3 py-3 text-body-compact text-outline">Sem itens</li>
@@ -363,6 +383,12 @@ export function OrdersBoard({
                 ))
               )}
             </ul>
+            {selected.delivery && Number(selected.delivery.fee) > 0 ? (
+              <div className="flex items-center justify-between text-body-compact text-on-surface-variant">
+                <span>Taxa de entrega</span>
+                <span>{formatMoney(selected.delivery.fee)}</span>
+              </div>
+            ) : null}
             <div className="flex items-center justify-between text-headline-sm font-semibold">
               <span>Total</span>
               <span className="text-primary">{formatMoney(selected.totalAmount)}</span>
@@ -530,4 +556,119 @@ function ageLabel(order: BoardOrder, now: string, timeZone: string) {
 
   const minutes = Math.max(0, Math.floor((new Date(now).getTime() - new Date(order.createdAt).getTime()) / 60000));
   return minutes < 1 ? "agora" : `${minutes} min`;
+}
+
+function paymentLabel(method: string | null) {
+  return method && isPaymentMethod(method) ? paymentMethodLabels[method] : "Pagamento não informado";
+}
+
+/** Troco que o entregador precisa levar (valor informado pelo cliente menos o total). */
+function changeToBring(delivery: BoardDelivery, total: string) {
+  if (delivery.paymentMethod !== "cash" || !delivery.changeFor) return null;
+  const change = Number(delivery.changeFor) - Number(total);
+  return change > 0 ? change : null;
+}
+
+function neighborhood(address: string | null) {
+  return address?.split("\n")[1]?.split(" - ")[0] ?? null;
+}
+
+function DeliveryChips({ delivery, total }: { delivery: BoardDelivery; total: string }) {
+  const change = changeToBring(delivery, total);
+  const area = neighborhood(delivery.address);
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="inline-flex items-center gap-1 rounded bg-primary-fixed px-1.5 py-0.5 text-label-micro text-on-primary-fixed">
+        <Icon name="two_wheeler" className="text-[13px]" />
+        {area ?? "Delivery"}
+      </span>
+      <span className="inline-flex items-center gap-1 rounded bg-surface-container px-1.5 py-0.5 text-label-micro text-on-surface-variant">
+        {delivery.paymentMethod && isPaymentMethod(delivery.paymentMethod) ? (
+          <Icon name={paymentMethodIcons[delivery.paymentMethod]} className="text-[13px]" />
+        ) : null}
+        {paymentLabel(delivery.paymentMethod)}
+        {change ? ` · troco ${formatMoney(change)}` : ""}
+      </span>
+    </div>
+  );
+}
+
+function DeliveryDetails({
+  customerName,
+  delivery,
+  total,
+}: {
+  customerName: string | null;
+  delivery: BoardDelivery;
+  total: string;
+}) {
+  const change = changeToBring(delivery, total);
+  const phone = delivery.phone ?? "";
+  const formattedPhone = phone.replace(/^(\d{2})(\d{4,5})(\d{4})$/, "($1) $2-$3");
+  const mapsUrl = delivery.address
+    ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(delivery.address.split("\n").slice(0, 2).join(", "))}`
+    : null;
+
+  return (
+    <section className="flex flex-col gap-2.5 rounded-lg border border-primary/20 bg-primary-fixed/30 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1.5 text-body-medium font-semibold text-on-surface">
+          <Icon name="two_wheeler" className="text-primary" />
+          Delivery
+        </span>
+        {customerName ? <span className="truncate text-body-compact text-on-surface">{customerName}</span> : null}
+      </div>
+
+      {phone ? (
+        <div className="flex flex-wrap items-center gap-2 text-body-compact">
+          <Icon name="call" className="text-outline" />
+          <a href={`tel:+55${phone}`} className="font-medium text-on-surface underline-offset-2 hover:underline">
+            {formattedPhone}
+          </a>
+          <a
+            href={`https://wa.me/55${phone}`}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded bg-emerald-50 px-1.5 py-0.5 text-label-micro font-medium text-emerald-800 hover:bg-emerald-100"
+          >
+            WhatsApp
+          </a>
+        </div>
+      ) : null}
+
+      {delivery.address ? (
+        <div className="flex items-start gap-2 text-body-compact">
+          <Icon name="location_on" className="mt-0.5 text-outline" />
+          <div className="min-w-0">
+            <p className="whitespace-pre-line text-on-surface">{delivery.address}</p>
+            {mapsUrl ? (
+              <a
+                href={mapsUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="text-label-regular font-medium text-tertiary hover:underline"
+              >
+                Abrir no mapa
+              </a>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="flex items-start gap-2 text-body-compact">
+        <Icon name="payments" className="mt-0.5 text-outline" />
+        <div>
+          <p className="font-medium text-on-surface">Recebe na entrega: {paymentLabel(delivery.paymentMethod)}</p>
+          {delivery.paymentMethod === "cash" ? (
+            <p className="text-on-surface-variant">
+              {change
+                ? `Troco para ${formatMoney(delivery.changeFor ?? "0")} — levar ${formatMoney(change)}`
+                : "Sem troco"}
+            </p>
+          ) : null}
+        </div>
+      </div>
+    </section>
+  );
 }

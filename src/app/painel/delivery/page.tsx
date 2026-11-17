@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 
 import { DeliverySettingsForm } from "@/components/delivery/delivery-settings-form";
 import { getDeliverySettings } from "@/modules/delivery/service";
+import { getEstablishmentForActor } from "@/modules/tenancy/service";
 import { can } from "@/server/authorization";
 import { requirePageActor } from "@/server/context";
 
@@ -22,7 +23,17 @@ async function Delivery() {
     redirect("/painel");
   }
 
-  const settings = await getDeliverySettings(actor.establishmentId);
+  const [settings, establishment] = await Promise.all([
+    getDeliverySettings(actor.establishmentId),
+    getEstablishmentForActor(actor),
+  ]);
 
-  return <DeliverySettingsForm settings={settings} storeHref={`/loja/${actor.slug}`} />;
+  return (
+    <DeliverySettingsForm
+      settings={settings}
+      storeHref={`/loja/${actor.slug}`}
+      storeOpen={establishment.isOpen}
+      suspended={establishment.status !== "active"}
+    />
+  );
 }

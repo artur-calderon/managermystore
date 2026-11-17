@@ -67,7 +67,7 @@ export function Sidebar({
             <span className="mt-1 flex items-center gap-1.5 text-label-micro font-medium">
               <span className={`size-2 rounded-full ${open ? "bg-emerald-600" : "bg-outline"}`} />
               <span className={open ? "text-emerald-800" : "text-outline"}>
-                {open ? "Aberto" : "Suspenso"}
+                {open ? "Aberto" : "Fechado"}
               </span>
             </span>
           </Link>

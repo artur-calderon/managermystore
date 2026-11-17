@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
-import { catalogOrderSchema, waiterOrderSchema } from "@/lib/validations/forms";
+import { waiterOrderSchema } from "@/lib/validations/forms";
 import { requireActor } from "@/server/context";
 import { actionError, type ActionState } from "@/server/action";
 
@@ -10,7 +10,6 @@ import {
   advanceOrder,
   cancelOrder,
   closeOrder,
-  createCatalogOrder,
   createWaiterOrder,
   dispatchOrder,
   removeOrderItem,
@@ -132,29 +131,6 @@ export async function closeOrderAction(
     revalidatePath("/painel/mesas");
     revalidatePath("/painel/caixa");
     return { success: "Pedido fechado." };
-  } catch (error) {
-    return actionError(error);
-  }
-}
-
-export async function placeCatalogOrderAction(input: {
-  slug: string;
-  customerName?: string;
-  notes?: string;
-  items: { productId: string; quantity: number }[];
-}) {
-  const parsed = catalogOrderSchema.safeParse({
-    customerName: input.customerName,
-    notes: input.notes,
-    items: input.items,
-  });
-  if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? "Dados inválidos." };
-  }
-
-  try {
-    const order = await createCatalogOrder(input.slug, parsed.data);
-    return { id: order.id, totalAmount: order.totalAmount };
   } catch (error) {
     return actionError(error);
   }

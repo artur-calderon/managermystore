@@ -1,8 +1,17 @@
 import { and, count, desc, eq, inArray, isNull, max } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { diningTables, orderItems, orders, products } from "@/lib/db/schema";
+import {
+  deliverySettings,
+  diningTables,
+  establishments,
+  orderItems,
+  orders,
+  products,
+  type PaymentMethod,
+} from "@/lib/db/schema";
 import { activeOrderStatuses, type OrderStatus } from "@/lib/db/schema";
+import { formatAddress, getAddress, type Customer } from "@/modules/customers/service";
 import type { Actor } from "@/modules/tenancy/service";
 import { assertCan } from "@/server/authorization";
 import { AppError } from "@/server/errors";
@@ -18,6 +27,17 @@ const kitchenTransitions: Partial<Record<OrderStatus, OrderStatus>> = {
 
 export type ItemInput = { productId: string; quantity: number };
 
+const deliveryColumns = {
+  customerPhone: orders.customerPhone,
+  deliveryAddress: orders.deliveryAddress,
+  deliveryFee: orders.deliveryFee,
+  paymentMethod: orders.paymentMethod,
+  changeFor: orders.changeFor,
+};
+
+/** Limite de pedidos de delivery aguardando aceite por cliente (protege contra abuso/spam). */
+const MAX_PENDING_DELIVERY_ORDERS = 3;
+
 export async function listOrders(establishmentId: string, statuses?: OrderStatus[]) {
   const rows = await db
     .select({
@@ -31,6 +51,7 @@ export async function listOrders(establishmentId: string, statuses?: OrderStatus
       closedAt: orders.closedAt,
       tableId: orders.tableId,
       tableName: diningTables.name,
+      ...deliveryColumns,
     })
     .from(orders)
     .leftJoin(
@@ -61,6 +82,7 @@ export async function getOrder(establishmentId: string, orderId: string) {
       closedAt: orders.closedAt,
       tableId: orders.tableId,
       tableName: diningTables.name,
+      ...deliveryColumns,
     })
     .from(orders)
     .leftJoin(
@@ -157,6 +179,139 @@ export async function createCatalogOrder(
     const totalAmount = await recomputeTotal(tx, establishment.id, order.id);
     return { id: order.id, totalAmount, createdAt: order.createdAt };
   });
+}
+
+/** Pedido de delivery feito pelo cliente logado no cardápio digital. */
+export async function createDeliveryOrder(
+  customer: Customer,
+  input: {
+    addressId: string;
+    paymentMethod: PaymentMethod;
+    changeFor?: string;
+    notes?: string;
+    items: ItemInput[];
+  },
+) {
+  if (input.items.length === 0) {
+    throw new AppError("empty_order", "Seu carrinho está vazio.");
+  }
+
+  const address = await getAddress(customer, input.addressId);
+
+  return transaction(async (tx) => {
+    const [store] = await tx
+      .select({
+        status: establishments.status,
+        isOpen: establishments.isOpen,
+        deletedAt: establishments.deletedAt,
+        deliveryEnabled: deliverySettings.enabled,
+        fee: deliverySettings.fee,
+        paymentMethods: deliverySettings.paymentMethods,
+      })
+      .from(establishments)
+      .leftJoin(deliverySettings, eq(deliverySettings.establishmentId, establishments.id))
+      .where(eq(establishments.id, customer.establishmentId))
+      .limit(1);
+
+    if (!store || store.deletedAt || store.status !== "active" || !store.isOpen) {
+      throw new AppError("store_closed", "A loja está fechada no momento. Tente novamente mais tarde.");
+    }
+    if (!store.deliveryEnabled) {
+      throw new AppError("delivery_disabled", "Esta loja não está aceitando pedidos de delivery.");
+    }
+    if (!store.paymentMethods?.includes(input.paymentMethod)) {
+      throw new AppError("invalid_payment_method", "Forma de pagamento não aceita por esta loja.");
+    }
+
+    const [pending] = await tx
+      .select({ total: count() })
+      .from(orders)
+      .where(
+        and(
+          eq(orders.establishmentId, customer.establishmentId),
+          eq(orders.customerId, customer.id),
+          eq(orders.status, "pending"),
+        ),
+      );
+    if ((pending?.total ?? 0) >= MAX_PENDING_DELIVERY_ORDERS) {
+      throw new AppError(
+        "too_many_pending",
+        "Você já tem pedidos aguardando a loja. Aguarde a confirmação antes de enviar outro.",
+      );
+    }
+
+    const [order] = await tx
+      .insert(orders)
+      .values({
+        establishmentId: customer.establishmentId,
+        channel: "delivery",
+        customerId: customer.id,
+        customerName: customer.name,
+        customerPhone: customer.phone,
+        deliveryAddress: formatAddress(address),
+        deliveryFee: store.fee ?? "0",
+        paymentMethod: input.paymentMethod,
+        notes: input.notes?.trim() || null,
+      })
+      .returning();
+
+    const quantities = new Map<string, number>();
+    for (const item of input.items) {
+      quantities.set(item.productId, (quantities.get(item.productId) ?? 0) + item.quantity);
+    }
+    for (const [productId, quantity] of quantities) {
+      if (quantity > 99) {
+        throw new AppError("invalid_quantity", "Quantidade máxima por item: 99.");
+      }
+      await addItem(tx, customer.establishmentId, order.id, { productId, quantity });
+    }
+
+    const totalAmount = await recomputeTotal(tx, customer.establishmentId, order.id);
+
+    if (input.paymentMethod === "cash" && input.changeFor?.trim()) {
+      let changeCents: number;
+      try {
+        changeCents = toCents(input.changeFor.trim().replace(",", "."));
+      } catch {
+        changeCents = Number.NaN;
+      }
+      if (!Number.isFinite(changeCents) || changeCents < toCents(totalAmount)) {
+        throw new AppError("invalid_change", "O troco precisa ser para um valor igual ou maior que o total do pedido.");
+      }
+      await tx.update(orders).set({ changeFor: fromCents(changeCents) }).where(eq(orders.id, order.id));
+    }
+
+    return { id: order.id, totalAmount };
+  });
+}
+
+/** Pedidos do cliente (mais recentes primeiro), com itens. */
+export async function listCustomerOrders(customer: Customer, limit = 20) {
+  const rows = await db
+    .select({
+      id: orders.id,
+      status: orders.status,
+      totalAmount: orders.totalAmount,
+      createdAt: orders.createdAt,
+      updatedAt: orders.updatedAt,
+      notes: orders.notes,
+      ...deliveryColumns,
+    })
+    .from(orders)
+    .where(and(eq(orders.establishmentId, customer.establishmentId), eq(orders.customerId, customer.id)))
+    .orderBy(desc(orders.createdAt))
+    .limit(limit);
+
+  return withItems(customer.establishmentId, rows);
+}
+
+export async function getCustomerOrdersVersion(customer: Customer) {
+  const [row] = await db
+    .select({ lastUpdate: max(orders.updatedAt), total: count() })
+    .from(orders)
+    .where(and(eq(orders.establishmentId, customer.establishmentId), eq(orders.customerId, customer.id)));
+
+  return `${row?.lastUpdate?.getTime() ?? 0}:${row?.total ?? 0}`;
 }
 
 export async function upsertOrderItem(actor: Actor, orderId: string, item: ItemInput) {
@@ -450,8 +605,15 @@ async function recomputeTotal(
     .from(orderItems)
     .where(and(eq(orderItems.establishmentId, establishmentId), eq(orderItems.orderId, orderId)));
 
+  const [order] = await tx
+    .select({ deliveryFee: orders.deliveryFee })
+    .from(orders)
+    .where(and(eq(orders.id, orderId), eq(orders.establishmentId, establishmentId)));
+
+  // Total = itens + taxa de entrega (zero fora do delivery).
   const total = fromCents(
-    items.reduce((sum, item) => sum + item.quantity * toCents(item.unitPrice), 0),
+    items.reduce((sum, item) => sum + item.quantity * toCents(item.unitPrice), 0) +
+      toCents(order?.deliveryFee ?? "0"),
   );
 
   await tx

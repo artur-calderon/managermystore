@@ -4,7 +4,7 @@ import { DashboardShell } from "@/components/layout/dashboard-shell";
 import { activeOrderStatuses } from "@/lib/db/schema";
 import { listOrders } from "@/modules/orders/service";
 import { listTables } from "@/modules/tables/service";
-import { getEstablishmentForActor } from "@/modules/tenancy/service";
+import { getEstablishmentForActor, isAcceptingOrders } from "@/modules/tenancy/service";
 import { can } from "@/server/authorization";
 import { requireActor } from "@/server/context";
 
@@ -32,7 +32,7 @@ async function PainelFrame({ children }: { children: React.ReactNode }) {
     <DashboardShell
       role={actor.role}
       establishmentName={actor.establishmentName}
-      open={establishment.status === "active"}
+      open={isAcceptingOrders(establishment)}
       userName={actor.userName}
       activeOrders={orders?.length ?? null}
       occupiedTables={visibleTables?.filter((table) => table.occupied).length ?? null}
