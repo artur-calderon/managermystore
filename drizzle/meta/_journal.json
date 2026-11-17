@@ -57,6 +57,13 @@
       "when": 1794873600000,
       "tag": "0007_customers_and_delivery_orders",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1794877200000,
+      "tag": "0008_product_variations",
+      "breakpoints": true
     }
   ]
 }

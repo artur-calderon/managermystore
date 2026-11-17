@@ -6,7 +6,9 @@ import {
   type RegistryCategory,
   type RegistryProduct,
 } from "@/components/catalog/products-registry";
+import { db } from "@/lib/db";
 import { listCategories, listProducts } from "@/modules/catalog/service";
+import { loadProductConfigs } from "@/modules/catalog/variations";
 import { can } from "@/server/authorization";
 import { requirePageActor } from "@/server/context";
 import { formatMoney } from "@/server/money";
@@ -26,6 +28,10 @@ async function Products() {
     listCategories(actor.establishmentId),
     listProducts(actor.establishmentId),
   ]);
+  const configs = await loadProductConfigs(
+    db,
+    products.map((product) => product.id),
+  );
 
   const rows: RegistryProduct[] = products.map((product) => {
     const price = Number(product.price);
@@ -48,6 +54,7 @@ async function Products() {
       isAvailable: product.isAvailable,
       categoryId: product.categoryId,
       categoryName: product.categoryName,
+      config: configs.get(product.id) ?? { variants: [], groups: [] },
     };
   });
 

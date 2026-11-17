@@ -4,7 +4,11 @@ import { redirect } from "next/navigation";
 
 import { WaiterApp, type WaiterProduct, type WaiterTable } from "@/components/waiter/waiter-app";
 import { roleLabels } from "@/components/layout/navigation";
+import { itemDetail } from "@/lib/order-item-options";
+import { emptyConfig } from "@/lib/product-config";
+import { db } from "@/lib/db";
 import { listCategories, listProducts } from "@/modules/catalog/service";
+import { loadProductConfigs } from "@/modules/catalog/variations";
 import { listActiveOrders } from "@/modules/orders/service";
 import { listTables } from "@/modules/tables/service";
 import { getEstablishmentForActor } from "@/modules/tenancy/service";
@@ -33,6 +37,10 @@ async function Waiter() {
     listProducts(actor.establishmentId),
     listActiveOrders(actor.establishmentId),
   ]);
+  const configs = await loadProductConfigs(
+    db,
+    products.map((product) => product.id),
+  );
 
   const ordersByTable = new Map<string, WaiterTable["orders"]>();
   for (const order of active) {
@@ -46,6 +54,8 @@ async function Waiter() {
       items: order.items.map((item) => ({
         id: item.id,
         productName: item.productName,
+        variantName: item.variantName,
+        detail: itemDetail(item),
         quantity: item.quantity,
       })),
     });
@@ -72,6 +82,7 @@ async function Waiter() {
     categoryName: product.categoryName,
     stockQuantity: product.stockQuantity,
     isAvailable: product.isAvailable,
+    config: configs.get(product.id) ?? emptyConfig,
   }));
 
   return (

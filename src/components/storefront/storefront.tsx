@@ -4,15 +4,20 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { Icon } from "@/components/ui/icon";
+import { OptionsSheet } from "@/components/waiter/options-sheet";
+import { itemTitle } from "@/lib/order-item-options";
 import { paymentMethodLabels, type PaymentMethod } from "@/lib/payment-methods";
+import { hasChoices, type ProductConfig } from "@/lib/product-config";
 
-import { useCart } from "./use-cart";
+import { resolveCart, unitsOf, useCart, type ResolvedLine } from "./use-cart";
 
 export type StorefrontProduct = {
   id: string;
   name: string;
   description: string | null;
   price: number;
+  stockQuantity: number;
+  config: ProductConfig;
 };
 
 export type StorefrontCategory = { id: string; name: string; products: StorefrontProduct[] };
@@ -37,10 +42,11 @@ export function Storefront({
   categories: StorefrontCategory[];
   customer: { firstName: string } | null;
 }) {
-  const { cart, setQuantity, clear } = useCart(store.slug);
+  const { cart, setQuantity, addLine, clear } = useCart(store.slug);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<string>("all");
   const [cartOpen, setCartOpen] = useState(false);
+  const [choosing, setChoosing] = useState<StorefrontProduct | null>(null);
 
   // Pedido online só com a loja aberta e o delivery ativo; caso contrário o cardápio é só para consulta.
   const canOrder = store.acceptingOrders && delivery.enabled;
@@ -51,11 +57,9 @@ export function Storefront({
     [categories],
   );
   // Itens de produtos pausados ou removidos desde que foram ao carrinho são ignorados.
-  const lines = Object.entries(cart)
-    .map(([productId, quantity]) => ({ product: products.get(productId), quantity }))
-    .filter((line): line is { product: StorefrontProduct; quantity: number } => Boolean(line.product));
-  const units = lines.reduce((sum, line) => sum + line.quantity, 0);
-  const subtotal = lines.reduce((sum, line) => sum + line.quantity * line.product.price, 0);
+  const { lines } = resolveCart(cart, products);
+  const units = unitsOf(lines);
+  const subtotal = lines.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0);
 
   const term = query.trim().toLowerCase();
   const visible = categories
@@ -229,11 +233,13 @@ export function Storefront({
                     <ProductCard
                       key={product.id}
                       product={product}
-                      quantity={cart[product.id] ?? 0}
+                      quantity={cart[product.id]?.quantity ?? 0}
+                      units={unitsOf(lines, product.id)}
                       canOrder={canOrder}
                       closed={!store.acceptingOrders}
                       showActions={showCart}
                       onQuantity={(quantity) => setQuantity(product.id, quantity)}
+                      onChoose={() => setChoosing(product)}
                     />
                   ))}
                 </div>
@@ -278,6 +284,26 @@ export function Storefront({
         </div>
       ) : null}
 
+      {choosing ? (
+        <OptionsSheet
+          key={choosing.id}
+          product={choosing}
+          available={Math.max(0, Math.min(99, choosing.stockQuantity) - unitsOf(lines, choosing.id))}
+          confirmLabel="Adicionar ao carrinho"
+          onClose={() => setChoosing(null)}
+          onAdd={(selection) => {
+            addLine({
+              productId: choosing.id,
+              variantId: selection.variantId,
+              optionIds: selection.optionIds,
+              quantity: selection.quantity,
+              note: selection.note,
+            });
+            setChoosing(null);
+          }}
+        />
+      ) : null}
+
       {showCart ? (
         <div className={`fixed inset-0 z-50 lg:hidden ${cartOpen ? "" : "pointer-events-none"}`} aria-hidden={!cartOpen}>
           <div
@@ -306,22 +332,31 @@ export function Storefront({
 function ProductCard({
   product,
   quantity,
+  units,
   canOrder,
   closed,
   showActions,
   onQuantity,
+  onChoose,
 }: {
   product: StorefrontProduct;
+  /** Quantidade da linha simples (produto sem escolhas). */
   quantity: number;
+  /** Total do produto no carrinho (todas as escolhas). */
+  units: number;
   canOrder: boolean;
   closed: boolean;
   showActions: boolean;
   onQuantity: (quantity: number) => void;
+  onChoose: () => void;
 }) {
+  const soldOut = product.stockQuantity <= 0;
+  const choices = hasChoices(product.config);
+  const limit = Math.min(99, product.stockQuantity);
   return (
     <article
       className={`flex items-center gap-3 rounded-xl bg-surface-container-lowest p-3 shadow-sm transition-shadow ${
-        closed ? "opacity-60 grayscale" : quantity > 0 ? "ring-1 ring-primary/30" : ""
+        closed || soldOut ? "opacity-60 grayscale" : units > 0 ? "ring-1 ring-primary/30" : ""
       }`}
     >
       <div
@@ -337,14 +372,37 @@ function ProductCard({
         ) : null}
         <div className="mt-1 flex items-center justify-between gap-2">
           <span className={`text-metric-table font-semibold ${closed ? "text-on-surface-variant" : "text-on-surface"}`}>
+            {product.config.variants.length > 0 ? (
+              <span className="mr-1 text-label-micro font-normal text-on-surface-variant">a partir de</span>
+            ) : null}
             {formatMoney(product.price)}
           </span>
-          {!showActions ? null : !canOrder ? (
+          {!showActions ? null : soldOut ? (
+            <span className="rounded bg-surface-container px-2 py-1 text-label-micro text-on-surface-variant">
+              Esgotado
+            </span>
+          ) : !canOrder ? (
             <span className="rounded bg-surface-container px-2 py-1 text-label-micro text-on-surface-variant">
               Indisponível
             </span>
+          ) : choices ? (
+            <button
+              type="button"
+              onClick={onChoose}
+              disabled={units >= limit}
+              aria-label={`Escolher ${product.name}`}
+              className="relative flex h-9 shrink-0 items-center gap-1 rounded-lg bg-primary-fixed px-3 text-label-regular font-semibold text-primary transition-all hover:bg-primary hover:text-on-primary active:scale-95 disabled:opacity-50"
+            >
+              <Icon name="add" className="text-[16px]" />
+              Escolher
+              {units > 0 ? (
+                <span className="absolute -top-1.5 -right-1.5 min-w-5 rounded-full bg-primary px-1 text-center text-[11px] leading-5 font-bold text-on-primary">
+                  {units}
+                </span>
+              ) : null}
+            </button>
           ) : quantity > 0 ? (
-            <Stepper quantity={quantity} onChange={onQuantity} label={product.name} />
+            <Stepper quantity={quantity} onChange={onQuantity} label={product.name} max={limit} />
           ) : (
             <button
               type="button"
@@ -373,12 +431,12 @@ function CartPanel({
   onClear,
   onClose,
 }: {
-  lines: { product: StorefrontProduct; quantity: number }[];
+  lines: ResolvedLine[];
   units: number;
   subtotal: number;
   fee: number;
   canOrder: boolean;
-  onQuantity: (productId: string, quantity: number) => void;
+  onQuantity: (key: string, quantity: number) => void;
   onClear: () => void;
   onClose?: () => void;
   slug: string;
@@ -420,16 +478,26 @@ function CartPanel({
         </div>
       ) : (
         <ul className="flex flex-col divide-y divide-surface-container">
-          {lines.map(({ product, quantity }) => (
-            <li key={product.id} className="flex items-center gap-2 py-2.5">
+          {lines.map((line) => (
+            <li key={line.key} className="flex items-center gap-2 py-2.5">
               <div className="min-w-0 flex-1">
-                <p className="truncate text-body-medium text-on-surface">{product.name}</p>
-                <p className="text-label-regular text-on-surface-variant">{formatMoney(product.price * quantity)}</p>
+                <p className="text-body-medium text-on-surface">
+                  {itemTitle({ productName: line.product.name, variantName: line.variantName })}
+                </p>
+                {line.summary ? <p className="text-label-regular text-primary">{line.summary}</p> : null}
+                {line.note ? <p className="text-label-regular text-on-surface-variant">Obs.: {line.note}</p> : null}
+                {line.problem ? <p className="text-label-regular text-error">{line.problem} Remova e escolha de novo.</p> : null}
+                <p className="text-label-regular text-on-surface-variant">{formatMoney(line.unitPrice * line.quantity)}</p>
               </div>
               {canOrder ? (
-                <Stepper quantity={quantity} onChange={(next) => onQuantity(product.id, next)} label={product.name} />
+                <Stepper
+                  quantity={line.quantity}
+                  onChange={(next) => onQuantity(line.key, next)}
+                  label={line.product.name}
+                  max={Math.min(99, line.product.stockQuantity) - (unitsOf(lines, line.productId) - line.quantity)}
+                />
               ) : (
-                <span className="text-body-compact text-on-surface-variant">{quantity}×</span>
+                <span className="text-body-compact text-on-surface-variant">{line.quantity}×</span>
               )}
             </li>
           ))}
@@ -481,7 +549,17 @@ function CartPanel({
   );
 }
 
-function Stepper({ quantity, onChange, label }: { quantity: number; onChange: (quantity: number) => void; label: string }) {
+function Stepper({
+  quantity,
+  onChange,
+  label,
+  max = 99,
+}: {
+  quantity: number;
+  onChange: (quantity: number) => void;
+  label: string;
+  max?: number;
+}) {
   return (
     <div className="flex shrink-0 items-center rounded-lg bg-surface-container-low p-0.5">
       <button
@@ -498,8 +576,9 @@ function Stepper({ quantity, onChange, label }: { quantity: number; onChange: (q
       <button
         type="button"
         onClick={() => onChange(quantity + 1)}
+        disabled={quantity >= max}
         aria-label={`Aumentar ${label}`}
-        className="flex size-9 items-center justify-center rounded-md bg-primary text-on-primary shadow-xs active:scale-95"
+        className="flex size-9 items-center justify-center rounded-md bg-primary text-on-primary shadow-xs active:scale-95 disabled:opacity-40"
       >
         <Icon name="add" className="text-[16px]" />
       </button>

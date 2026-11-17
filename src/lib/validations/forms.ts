@@ -35,11 +35,54 @@ export const productSchema = z.object({
     .min(0, "A quantidade não pode ser negativa."),
 });
 
+/** Variações e grupos de opções de um produto (regras de negócio ficam no serviço). */
+export const productConfigSchema = z.object({
+  variants: z
+    .array(
+      z.object({
+        key: z.string().min(1).max(64),
+        id: z.uuid().optional(),
+        name: z.string().max(60, "Nome de variação muito longo."),
+        price: z.string().max(12),
+        isAvailable: z.boolean(),
+      }),
+    )
+    .max(20),
+  groups: z
+    .array(
+      z.object({
+        id: z.uuid().optional(),
+        variantKey: z.string().min(1).max(64).nullable(),
+        name: z.string().max(60, "Nome de grupo muito longo."),
+        minSelect: z.number().int().min(0).max(50),
+        maxSelect: z.number().int().min(1).max(50),
+        options: z
+          .array(
+            z.object({
+              id: z.uuid().optional(),
+              name: z.string().max(60, "Nome de opção muito longo."),
+              price: z.string().max(12),
+              isDefault: z.boolean(),
+              isAvailable: z.boolean(),
+            }),
+          )
+          .max(50),
+      }),
+    )
+    .max(20),
+});
+
 export const cashSchema = z.object({
   type: z.enum(["in", "out"]),
   amount: z.string().trim().min(1, "Informe o valor."),
   description: z.string().trim().optional(),
 });
+
+/** Variação e opções escolhidas para um item (validadas de novo no servidor contra o produto). */
+const itemSelection = {
+  variantId: z.uuid().nullish(),
+  optionIds: z.array(z.uuid()).max(50).optional(),
+};
 
 export const waiterOrderSchema = z.object({
   tableId: z.uuid("Escolha uma mesa."),
@@ -49,7 +92,8 @@ export const waiterOrderSchema = z.object({
       z.object({
         productId: z.uuid(),
         productName: z.string().trim().optional(),
-        quantity: z.number().int().positive(),
+        quantity: z.number().int().positive().max(999),
+        ...itemSelection,
         note: z.string().trim().max(200).optional(),
       }),
     )
@@ -93,7 +137,14 @@ export const deliveryOrderSchema = z.object({
   changeFor: z.string().trim().max(12).optional(),
   notes: z.string().trim().max(500).optional(),
   items: z
-    .array(z.object({ productId: z.uuid(), quantity: z.number().int().min(1).max(99) }))
+    .array(
+      z.object({
+        productId: z.uuid(),
+        quantity: z.number().int().min(1).max(99),
+        note: z.string().trim().max(200).optional(),
+        ...itemSelection,
+      }),
+    )
     .min(1, "Seu carrinho está vazio.")
     .max(50, "Pedido com itens demais."),
 });

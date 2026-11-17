@@ -1,4 +1,7 @@
 import { Suspense } from "react";
+import { db } from "@/lib/db";
+import { emptyConfig } from "@/lib/product-config";
+import { loadProductConfigs } from "@/modules/catalog/variations";
 
 import { CheckoutForm } from "@/components/storefront/checkout-form";
 import { StoreShell } from "@/components/storefront/store-shell";
@@ -23,6 +26,10 @@ async function Checkout({ params }: PageProps<"/loja/[slug]/checkout">) {
     getDeliverySettings(store.id),
     listProducts(store.id, true),
   ]);
+  const configs = await loadProductConfigs(
+    db,
+    products.map((product) => product.id),
+  );
 
   return (
     <StoreShell slug={slug} storeName={store.name} title="Finalizar pedido" customerName={customer.name}>
@@ -38,7 +45,13 @@ async function Checkout({ params }: PageProps<"/loja/[slug]/checkout">) {
           label: address.label,
           text: formatAddress(address),
         }))}
-        products={products.map((product) => ({ id: product.id, name: product.name, price: Number(product.price) }))}
+        products={products.map((product) => ({
+          id: product.id,
+          name: product.name,
+          price: Number(product.price),
+          stockQuantity: product.stockQuantity,
+          config: configs.get(product.id) ?? emptyConfig,
+        }))}
       />
     </StoreShell>
   );

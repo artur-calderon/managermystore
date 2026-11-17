@@ -139,7 +139,14 @@ export async function closeOrderAction(
 export async function sendWaiterOrderAction(input: {
   tableId: string;
   notes?: string;
-  items: { productId: string; productName?: string; quantity: number; note?: string }[];
+  items: {
+    productId: string;
+    productName?: string;
+    quantity: number;
+    note?: string;
+    variantId?: string | null;
+    optionIds?: string[];
+  }[];
 }): Promise<{ error?: string; success?: string; orderId?: string }> {
   const parsed = waiterOrderSchema.safeParse(input);
   if (!parsed.success) {
@@ -148,14 +155,17 @@ export async function sendWaiterOrderAction(input: {
 
   try {
     const actor = await requireActor();
-    const itemNotes = parsed.data.items
-      .filter((item) => item.note)
-      .map((item) => `${item.productName ?? "Item"}: ${item.note}`);
-    const notes = [parsed.data.notes, ...itemNotes].filter(Boolean).join("\n");
     const order = await createWaiterOrder(actor, {
       tableId: parsed.data.tableId,
-      notes,
-      items: parsed.data.items.map(({ productId, quantity }) => ({ productId, quantity })),
+      notes: parsed.data.notes,
+      // A observação de cada item fica no próprio item (aparece junto dele na cozinha).
+      items: parsed.data.items.map(({ productId, quantity, variantId, optionIds, note }) => ({
+        productId,
+        quantity,
+        variantId,
+        optionIds,
+        notes: note,
+      })),
     });
     revalidatePath("/painel");
     revalidatePath("/painel/pedidos");

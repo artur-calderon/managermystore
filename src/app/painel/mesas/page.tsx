@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { itemDetail, itemTitle } from "@/lib/order-item-options";
 import { connection } from "next/server";
 
 import { LiveRefresh } from "@/components/shared/live-refresh";
@@ -41,7 +42,8 @@ async function Tables() {
       notes: order.notes,
       items: order.items.map((item) => ({
         id: item.id,
-        productName: item.productName,
+        productName: itemTitle(item),
+        detail: itemDetail(item),
         quantity: item.quantity,
         unitPrice: item.unitPrice,
       })),

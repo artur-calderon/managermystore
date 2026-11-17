@@ -6,6 +6,9 @@ import { useMemo, useRef, useState, useTransition } from "react";
 
 import { LiveRefresh } from "@/components/shared/live-refresh";
 import { Icon } from "@/components/ui/icon";
+import { OptionsSheet, type SheetSelection } from "@/components/waiter/options-sheet";
+import { itemTitle } from "@/lib/order-item-options";
+import { evaluateSelection, hasChoices, selectionKey, type ProductConfig } from "@/lib/product-config";
 import { sendWaiterOrderAction } from "@/modules/orders/actions";
 import { logoutAction } from "@/modules/tenancy/actions";
 
@@ -22,7 +25,7 @@ export type WaiterTable = {
     status: WaiterOrderStatus;
     totalAmount: number;
     createdAt: string;
-    items: { id: string; productName: string; quantity: number }[];
+    items: { id: string; productName: string; variantName: string | null; detail: string; quantity: number }[];
   }[];
 };
 
@@ -35,14 +38,51 @@ export type WaiterProduct = {
   categoryName: string;
   stockQuantity: number;
   isAvailable: boolean;
+  config: ProductConfig;
 };
 
 type Category = { id: string; name: string };
 type View = "mesas" | "lancar" | "comanda";
-type DraftItem = { quantity: number; note: string };
+/** Uma linha da comanda: produto + escolha (variação/opções). `optionIds` ausente = padrão do produto. */
+type DraftItem = {
+  productId: string;
+  variantId: string | null;
+  optionIds?: string[];
+  quantity: number;
+  note: string;
+};
 type Draft = { items: Record<string, DraftItem>; notes: string };
+type DraftLine = DraftItem & {
+  key: string;
+  product: WaiterProduct;
+  unitPrice: number;
+  variantName: string | null;
+  summary: string;
+};
 
 const emptyDraft: Draft = { items: {}, notes: "" };
+
+function draftLinesOf(draft: Draft | undefined, productsById: Map<string, WaiterProduct>): DraftLine[] {
+  return Object.entries(draft?.items ?? {}).flatMap(([key, item]) => {
+    const product = productsById.get(item.productId);
+    if (!product) return [];
+    const evaluation = evaluateSelection(product.price, product.config, item.variantId, item.optionIds ?? []);
+    return [
+      {
+        ...item,
+        key,
+        product,
+        unitPrice: item.optionIds === undefined && !item.variantId ? product.price : evaluation.unitCents / 100,
+        variantName: evaluation.variantName,
+        summary: item.optionIds === undefined ? "" : evaluation.summary,
+      },
+    ];
+  });
+}
+
+function unitsOf(lines: DraftLine[], productId?: string) {
+  return lines.reduce((sum, line) => sum + (!productId || line.productId === productId ? line.quantity : 0), 0);
+}
 
 const quickTags = ["Sem gelo", "Talheres extras", "Entrada rápida", "Mesa c/ criança", "Copo descartável"];
 
@@ -100,11 +140,10 @@ export function WaiterApp({
   const productsById = useMemo(() => new Map(products.map((product) => [product.id, product])), [products]);
   const selected = tables.find((table) => table.id === selectedId) ?? null;
   const draft = (selectedId && drafts[selectedId]) || emptyDraft;
-  const draftLines = Object.entries(draft.items)
-    .map(([productId, item]) => ({ product: productsById.get(productId), ...item }))
-    .filter((line): line is { product: WaiterProduct } & DraftItem => Boolean(line.product));
-  const draftUnits = draftLines.reduce((sum, line) => sum + line.quantity, 0);
-  const draftTotal = draftLines.reduce((sum, line) => sum + line.quantity * line.product.price, 0);
+  const draftLines = draftLinesOf(draft, productsById);
+  const draftUnits = unitsOf(draftLines);
+  const draftTotal = draftLines.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0);
+  const [choosing, setChoosing] = useState<WaiterProduct | null>(null);
 
   function showFlash(tone: "success" | "error", text: string) {
     if (flashTimer.current) clearTimeout(flashTimer.current);
@@ -116,25 +155,52 @@ export function WaiterApp({
     setDrafts((current) => ({ ...current, [tableId]: update(current[tableId] ?? emptyDraft) }));
   }
 
-  function setQuantity(productId: string, quantity: number) {
+  /** Quantidade de uma linha; para produto simples a chave é o próprio id do produto. */
+  function setQuantity(key: string, quantity: number) {
     if (!selectedId) return;
     updateDraft(selectedId, (current) => {
       const items = { ...current.items };
       if (quantity <= 0) {
-        delete items[productId];
+        delete items[key];
       } else {
-        items[productId] = { note: items[productId]?.note ?? "", quantity };
+        items[key] = items[key]
+          ? { ...items[key], quantity }
+          : { productId: key, variantId: null, quantity, note: "" };
       }
       return { ...current, items };
     });
   }
 
-  function setItemNote(productId: string, note: string) {
+  /** Inclui uma escolha feita na folha de opções (soma se já houver a mesma escolha). */
+  function addSelection(product: WaiterProduct, selection: SheetSelection) {
+    if (!selectedId) return;
+    const key = selectionKey(product.id, selection.variantId, selection.optionIds);
+    updateDraft(selectedId, (current) => {
+      const existing = current.items[key];
+      const note = selection.note.trim() || existing?.note || "";
+      return {
+        ...current,
+        items: {
+          ...current.items,
+          [key]: {
+            productId: product.id,
+            variantId: selection.variantId,
+            optionIds: selection.optionIds,
+            quantity: (existing?.quantity ?? 0) + selection.quantity,
+            note,
+          },
+        },
+      };
+    });
+    setChoosing(null);
+  }
+
+  function setItemNote(key: string, note: string) {
     if (!selectedId) return;
     updateDraft(selectedId, (current) => {
-      const item = current.items[productId];
+      const item = current.items[key];
       if (!item) return current;
-      return { ...current, items: { ...current.items, [productId]: { ...item, note } } };
+      return { ...current, items: { ...current.items, [key]: { ...item, note } } };
     });
   }
 
@@ -181,6 +247,8 @@ export function WaiterApp({
           productName: line.product.name,
           quantity: line.quantity,
           note: line.note.trim() || undefined,
+          variantId: line.variantId,
+          optionIds: line.optionIds,
         })),
       });
 
@@ -269,7 +337,9 @@ export function WaiterApp({
                 products={products}
                 categories={categories}
                 draft={draft}
+                lines={draftLines}
                 onQuantity={setQuantity}
+                onChoose={setChoosing}
                 onChangeTable={() => goTo("mesas")}
               />
             </div>
@@ -296,8 +366,18 @@ export function WaiterApp({
         ) : null}
       </main>
 
+      {choosing ? (
+        <OptionsSheet
+          key={choosing.id}
+          product={choosing}
+          available={Math.max(0, choosing.stockQuantity - unitsOf(draftLines, choosing.id))}
+          onClose={() => setChoosing(null)}
+          onAdd={(selection) => addSelection(choosing, selection)}
+        />
+      ) : null}
+
       {flash ? (
-        <div className="pointer-events-none fixed inset-x-0 top-[calc(3.5rem+env(safe-area-inset-top)+0.5rem)] z-50 flex justify-center px-margin-mobile">
+        <div className="pointer-events-none fixed inset-x-0 top-[calc(3.5rem+env(safe-area-inset-top)+0.5rem)] z-[70] flex justify-center px-margin-mobile">
           <div
             role="status"
             className={`pointer-events-auto flex max-w-md items-center gap-2 rounded-xl px-3 py-2 text-body-compact shadow-lg ${
@@ -489,12 +569,9 @@ function TableCard({
   now: string;
   onOpen: () => void;
 }) {
-  const draftEntries = Object.entries(draft?.items ?? {});
-  const draftUnits = draftEntries.reduce((sum, [, item]) => sum + item.quantity, 0);
-  const draftTotal = draftEntries.reduce(
-    (sum, [productId, item]) => sum + item.quantity * (productsById.get(productId)?.price ?? 0),
-    0,
-  );
+  const lines = draftLinesOf(draft, productsById);
+  const draftUnits = unitsOf(lines);
+  const draftTotal = lines.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0);
   const tableTotal = table.orders.reduce((sum, order) => sum + order.totalAmount, 0);
   const occupied = table.orders.length > 0;
   const minutes = occupied
@@ -598,14 +675,18 @@ function LaunchView({
   products,
   categories,
   draft,
+  lines,
   onQuantity,
+  onChoose,
   onChangeTable,
 }: {
   table: WaiterTable;
   products: WaiterProduct[];
   categories: Category[];
   draft: Draft;
-  onQuantity: (productId: string, quantity: number) => void;
+  lines: DraftLine[];
+  onQuantity: (key: string, quantity: number) => void;
+  onChoose: (product: WaiterProduct) => void;
   onChangeTable: () => void;
 }) {
   const [query, setQuery] = useState("");
@@ -712,7 +793,9 @@ function LaunchView({
               key={product.id}
               product={product}
               quantity={draft.items[product.id]?.quantity ?? 0}
+              units={unitsOf(lines, product.id)}
               onQuantity={(quantity) => onQuantity(product.id, quantity)}
+              onChoose={() => onChoose(product)}
             />
           ))
         )}
@@ -724,12 +807,21 @@ function LaunchView({
 function ProductRow({
   product,
   quantity,
+  units,
   onQuantity,
+  onChoose,
 }: {
   product: WaiterProduct;
+  /** Quantidade da linha simples (produto sem escolhas). */
   quantity: number;
+  /** Total de unidades do produto na comanda (todas as escolhas). */
+  units: number;
   onQuantity: (quantity: number) => void;
+  onChoose: () => void;
 }) {
+  const choices = hasChoices(product.config);
+  const soldOut = product.stockQuantity <= 0;
+  const atLimit = units >= product.stockQuantity;
   if (!product.isAvailable) {
     return (
       <article className="flex items-center justify-between rounded-xl bg-surface-container-lowest/60 p-3 opacity-60">
@@ -754,13 +846,13 @@ function ProductRow({
     );
   }
 
-  const overStock = quantity > product.stockQuantity;
+  const overStock = units > product.stockQuantity;
 
   return (
     <article
       className={`flex items-center justify-between rounded-xl bg-surface-container-lowest p-3 shadow-sm transition-shadow ${
-        quantity > 0 ? "ring-1 ring-primary/30" : ""
-      }`}
+        units > 0 ? "ring-1 ring-primary/30" : ""
+      } ${soldOut ? "opacity-60" : ""}`}
     >
       <div className="flex min-w-0 items-center gap-3 pr-2">
         <ProductThumb name={product.name} />
@@ -770,27 +862,48 @@ function ProductRow({
             <span className="size-1 shrink-0 rounded-full bg-on-surface-variant/40" />
             <span
               className={`shrink-0 ${
-                product.stockQuantity === 0 || overStock
-                  ? "text-error"
-                  : quantity > 0
-                    ? "text-primary"
-                    : "text-on-surface-variant"
+                soldOut || overStock ? "text-error" : units > 0 ? "text-primary" : "text-on-surface-variant"
               }`}
             >
-              {product.stockQuantity} un
+              {soldOut ? "Esgotado" : `${product.stockQuantity} un`}
             </span>
           </span>
           <h2 className="truncate text-body-medium text-on-surface">{product.name}</h2>
-          <span className="pt-0.5 text-metric-table font-semibold text-on-surface">{formatMoney(product.price)}</span>
+          <span className="pt-0.5 text-metric-table font-semibold text-on-surface">
+            {product.config.variants.length > 0 ? (
+              <span className="mr-1 text-label-micro font-normal text-on-surface-variant">a partir de</span>
+            ) : null}
+            {formatMoney(product.price)}
+          </span>
         </div>
       </div>
-      {quantity > 0 ? (
-        <Stepper quantity={quantity} onChange={onQuantity} accent />
+      {soldOut ? (
+        <span className="inline-flex shrink-0 items-center rounded bg-error-container px-2 py-1 text-label-micro text-on-error-container">
+          Esgotado
+        </span>
+      ) : choices ? (
+        <button
+          type="button"
+          onClick={onChoose}
+          disabled={atLimit}
+          className="relative flex h-10 shrink-0 items-center gap-1 rounded-lg bg-surface-container-low px-3 text-label-micro text-primary transition-all hover:bg-primary-fixed active:scale-95 disabled:opacity-50"
+        >
+          <Icon name="tune" className="text-[15px]" />
+          Escolher
+          {units > 0 ? (
+            <span className="absolute -top-1.5 -right-1.5 min-w-5 rounded-full bg-primary px-1 text-center text-[11px] leading-5 font-bold text-on-primary">
+              {units}
+            </span>
+          ) : null}
+        </button>
+      ) : quantity > 0 ? (
+        <Stepper quantity={quantity} onChange={onQuantity} accent max={product.stockQuantity - (units - quantity)} />
       ) : (
         <button
           type="button"
           onClick={() => onQuantity(1)}
-          className="flex h-10 shrink-0 items-center gap-1 rounded-lg bg-surface-container-low px-3 text-label-micro text-primary transition-all hover:bg-primary-fixed active:scale-95"
+          disabled={atLimit}
+          className="flex h-10 shrink-0 items-center gap-1 rounded-lg bg-surface-container-low px-3 text-label-micro text-primary transition-all hover:bg-primary-fixed active:scale-95 disabled:opacity-50"
         >
           <Icon name="add" className="text-[15px]" />
           Adicionar
@@ -818,7 +931,7 @@ function ComandaView({
   onSubmit,
 }: {
   table: WaiterTable;
-  lines: ({ product: WaiterProduct } & DraftItem)[];
+  lines: DraftLine[];
   notes: string;
   units: number;
   total: number;
@@ -826,8 +939,8 @@ function ComandaView({
   timeZone: string;
   userName: string;
   sending: boolean;
-  onQuantity: (productId: string, quantity: number) => void;
-  onItemNote: (productId: string, note: string) => void;
+  onQuantity: (key: string, quantity: number) => void;
+  onItemNote: (key: string, note: string) => void;
   onNotes: (notes: string) => void;
   onClear: () => void;
   onMore: () => void;
@@ -903,10 +1016,18 @@ function ComandaView({
           <ul className="flex flex-col gap-1.5">
             {table.orders.map((order) => (
               <li key={order.id} className="rounded-lg bg-surface-container-lowest px-2.5 py-2">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="truncate text-label-regular text-on-surface-variant">
-                    {order.items.map((item) => `${item.quantity}× ${item.productName}`).join(", ") || "Sem itens"}
-                  </span>
+                <div className="flex items-start justify-between gap-2">
+                  <ul className="min-w-0 text-label-regular text-on-surface-variant">
+                    {order.items.length === 0 ? <li>Sem itens</li> : null}
+                    {order.items.map((item) => (
+                      <li key={item.id} className="min-w-0">
+                        <span className="text-on-surface">
+                          {item.quantity}× {itemTitle(item)}
+                        </span>
+                        {item.detail ? <span className="block truncate text-label-micro">{item.detail}</span> : null}
+                      </li>
+                    ))}
+                  </ul>
                   <span className={`shrink-0 rounded-full px-2 py-0.5 text-label-micro ${statusClasses[order.status]}`}>
                     {statusLabels[order.status]}
                   </span>
@@ -944,26 +1065,31 @@ function ComandaView({
         ) : (
           lines.map((line) => (
             <div
-              key={line.product.id}
+              key={line.key}
               className="flex flex-col gap-space-xs rounded-xl bg-surface-container-lowest p-space-md shadow-sm"
             >
               <div className="flex items-start justify-between gap-space-sm">
                 <div className="flex min-w-0 gap-space-sm">
                   <ProductThumb name={line.product.name} />
                   <div className="flex min-w-0 flex-col">
-                    <span className="truncate text-body-medium text-on-surface">{line.product.name}</span>
+                    <span className="line-clamp-2 text-body-medium text-on-surface">
+                      {itemTitle({ productName: line.product.name, variantName: line.variantName })}
+                    </span>
+                    {line.summary ? (
+                      <span className="text-label-regular text-primary">{line.summary}</span>
+                    ) : null}
                     <span className="text-label-regular text-on-surface-variant">
-                      {formatMoney(line.product.price)} un.
+                      {formatMoney(line.unitPrice)} un.
                     </span>
                   </div>
                 </div>
                 <div className="flex shrink-0 flex-col items-end">
                   <span className="text-headline-sm text-on-surface">
-                    {formatMoney(line.product.price * line.quantity)}
+                    {formatMoney(line.unitPrice * line.quantity)}
                   </span>
                   <button
                     type="button"
-                    onClick={() => onQuantity(line.product.id, 0)}
+                    onClick={() => onQuantity(line.key, 0)}
                     title="Remover item"
                     aria-label={`Remover ${line.product.name}`}
                     className="mt-0.5 flex size-9 items-center justify-center rounded-lg text-on-surface-variant transition-colors hover:bg-error-container hover:text-error"
@@ -975,14 +1101,15 @@ function ComandaView({
               <div className="flex items-center justify-between gap-2 pt-1">
                 <Stepper
                   quantity={line.quantity}
-                  onChange={(quantity) => onQuantity(line.product.id, Math.max(1, quantity))}
+                  onChange={(quantity) => onQuantity(line.key, Math.max(1, quantity))}
                   min={1}
+                  max={line.product.stockQuantity - (unitsOf(lines, line.productId) - line.quantity)}
                 />
                 <label className="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg bg-surface-container-low px-2.5 py-1.5">
                   <Icon name="edit_note" className="shrink-0 text-[14px] text-primary" />
                   <input
                     value={line.note}
-                    onChange={(event) => onItemNote(line.product.id, event.target.value)}
+                    onChange={(event) => onItemNote(line.key, event.target.value)}
                     maxLength={200}
                     placeholder="Observação do preparo..."
                     className="w-full border-0 bg-transparent p-0 text-body-compact text-on-surface outline-none placeholder:text-on-surface-variant/60"
@@ -1104,11 +1231,14 @@ function Stepper({
   onChange,
   accent = false,
   min = 0,
+  max = Number.POSITIVE_INFINITY,
 }: {
   quantity: number;
   onChange: (quantity: number) => void;
   accent?: boolean;
   min?: number;
+  /** Limite superior (estoque disponível). */
+  max?: number;
 }) {
   return (
     <div className="flex shrink-0 items-center rounded-lg bg-surface-container-low p-1">
@@ -1127,8 +1257,10 @@ function Stepper({
       <button
         type="button"
         onClick={() => onChange(quantity + 1)}
+        disabled={quantity >= max}
         aria-label="Aumentar quantidade"
-        className={`flex size-9 items-center justify-center rounded-md shadow-xs transition-transform active:scale-95 ${
+        title={quantity >= max ? "Sem estoque para mais unidades" : undefined}
+        className={`flex size-9 items-center justify-center rounded-md shadow-xs transition-transform active:scale-95 disabled:opacity-40 ${
           accent ? "bg-primary text-on-primary" : "bg-surface-container-lowest text-on-surface"
         }`}
       >

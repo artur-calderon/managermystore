@@ -4,7 +4,16 @@ import { eq } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { pool, db } from "@/lib/db";
-import { diningTables, establishmentMembers } from "@/lib/db/schema";
+import {
+  diningTables,
+  establishmentMembers,
+  productOptionGroups,
+  productOptions,
+  products,
+  productVariants,
+} from "@/lib/db/schema";
+import { describeItemOptions, itemDetail, itemTitle } from "@/lib/order-item-options";
+import { saveProductConfig } from "@/modules/catalog/variations-admin";
 import { createCategory, createProduct, updateProduct } from "@/modules/catalog/service";
 import { addCashMovement } from "@/modules/cash/service";
 import {
@@ -70,6 +79,7 @@ describe("estabelecimento e pedidos", () => {
       categoryId: category.id,
       name: "X-burger",
       price: "12,50",
+      stockQuantity: 10,
     });
     expect(product.price).toBe("12.50");
 
@@ -125,6 +135,7 @@ describe("estabelecimento e pedidos", () => {
       categoryId: category.id,
       name: "Suco",
       price: "8.00",
+      stockQuantity: 10,
     });
     const table = await createTable(owner, "Balcão");
 
@@ -239,7 +250,7 @@ describe("estabelecimento e pedidos", () => {
     expect(saved).toEqual({ enabled: true, fee: "7.50", paymentMethods: ["pix", "cash"] });
 
     const category = await createCategory(owner, "Espetos");
-    const product = await createProduct(owner, { categoryId: category.id, name: "Picanha", price: "20" });
+    const product = await createProduct(owner, { categoryId: category.id, name: "Picanha", price: "20", stockQuantity: 20 });
     const customer = await registerCustomer(store.establishment.id, {
       name: "Cliente Delivery",
       email: uniqueEmail("cliente"),
@@ -324,6 +335,306 @@ describe("estabelecimento e pedidos", () => {
     await advanceOrder(owner, local.id);
     await expect(dispatchOrder(owner, local.id)).rejects.toMatchObject({ code: "invalid_transition" });
     expect((await closeOrder(owner, local.id)).status).toBe("closed");
+
+    // Delivery com variação, opções e observação por item (como o checkout envia).
+    const espeto = await createProduct(owner, { categoryId: category.id, name: "Espeto", price: "12", stockQuantity: 4 });
+    const config = await saveProductConfig(owner, espeto.id, {
+      variants: [{ key: "c", name: "Completo", price: "20", isAvailable: true }],
+      groups: [
+        {
+          variantKey: "c",
+          name: "Acompanhamentos",
+          minSelect: 0,
+          maxSelect: 2,
+          options: [
+            { name: "Arroz", price: "", isDefault: true, isAvailable: true },
+            { name: "Farofa", price: "", isDefault: true, isAvailable: true },
+          ],
+        },
+      ],
+    });
+    const [arroz] = config.groups[0].options;
+    const withOptions = await createDeliveryOrder(customer, {
+      addressId: address.id,
+      paymentMethod: "pix",
+      items: [
+        { productId: espeto.id, quantity: 2, variantId: config.variants[0].id, optionIds: [arroz.id], notes: "Bem passado" },
+      ],
+    });
+    expect(withOptions.totalAmount).toBe("47.50");
+    const [deliveredItem] = (await getOrder(store.establishment.id, withOptions.id)).items;
+    expect(itemTitle(deliveredItem)).toBe("Espeto Completo");
+    expect(itemDetail(deliveredItem)).toBe("sem Farofa · Obs.: Bem passado");
+  });
+
+  it("aplica variações, opções e baixa o estoque", async () => {
+    const store = await openStore("variacoes");
+    const owner = actor(store, "owner");
+    const establishmentId = store.establishment.id;
+    const category = await createCategory(owner, "Espetos");
+    const espeto = await createProduct(owner, {
+      categoryId: category.id,
+      name: "Espetinho",
+      price: "12",
+      stockQuantity: 5,
+    });
+    const table = await createTable(owner, "Mesa 1");
+
+    const [simples, completo] = await db
+      .insert(productVariants)
+      .values([
+        { establishmentId, productId: espeto.id, name: "Simples", price: "12.00", sortOrder: 0 },
+        { establishmentId, productId: espeto.id, name: "Completo", price: "20.00", sortOrder: 1 },
+      ])
+      .returning();
+    const [sides, extras] = await db
+      .insert(productOptionGroups)
+      .values([
+        { establishmentId, productId: espeto.id, variantId: completo.id, name: "Acompanhamentos", minSelect: 0, maxSelect: 4 },
+        { establishmentId, productId: espeto.id, name: "Adicionais", minSelect: 0, maxSelect: 2, sortOrder: 1 },
+      ])
+      .returning();
+    const [arroz, vinagrete, , , queijo, bacon] = await db
+      .insert(productOptions)
+      .values([
+        { establishmentId, groupId: sides.id, name: "arroz", isDefault: true, sortOrder: 0 },
+        { establishmentId, groupId: sides.id, name: "vinagrete", isDefault: true, sortOrder: 1 },
+        { establishmentId, groupId: sides.id, name: "farofa", isDefault: true, sortOrder: 2 },
+        { establishmentId, groupId: sides.id, name: "mandioca", isDefault: true, sortOrder: 3 },
+        { establishmentId, groupId: extras.id, name: "Queijo coalho", price: "4.00", sortOrder: 0 },
+        { establishmentId, groupId: extras.id, name: "Bacon", price: "3.00", isAvailable: false, sortOrder: 1 },
+      ])
+      .returning();
+
+    const stock = async () =>
+      (await db.select({ stock: products.stockQuantity }).from(products).where(eq(products.id, espeto.id)))[0]?.stock;
+
+    // Produto com variações exige a escolha; opções de outro grupo/variação e indisponíveis são recusadas.
+    await expect(
+      createWaiterOrder(owner, { tableId: table.id, items: [{ productId: espeto.id, quantity: 1 }] }),
+    ).rejects.toMatchObject({ code: "variant_required" });
+    await expect(
+      createWaiterOrder(owner, {
+        tableId: table.id,
+        items: [{ productId: espeto.id, quantity: 1, variantId: simples.id, optionIds: [arroz.id] }],
+      }),
+    ).rejects.toMatchObject({ code: "invalid_option" });
+    await expect(
+      createWaiterOrder(owner, {
+        tableId: table.id,
+        items: [{ productId: espeto.id, quantity: 1, variantId: completo.id, optionIds: [bacon.id] }],
+      }),
+    ).rejects.toMatchObject({ code: "option_unavailable" });
+    expect(await stock()).toBe(5);
+
+    // 2x Completo só com arroz e vinagrete + queijo; 1x Completo padrão em outra linha.
+    const order = await createWaiterOrder(owner, {
+      tableId: table.id,
+      items: [
+        { productId: espeto.id, quantity: 2, variantId: completo.id, optionIds: [arroz.id, vinagrete.id, queijo.id] },
+        { productId: espeto.id, quantity: 1, variantId: completo.id },
+      ],
+    });
+    // 2 x (20 + 4) + 1 x 20 — retirar acompanhamento não baixa o preço.
+    expect(order.totalAmount).toBe("68.00");
+    expect(await stock()).toBe(2);
+
+    const saved = await getOrder(establishmentId, order.id);
+    expect(saved.items).toHaveLength(2);
+    const custom = saved.items.find((item) => item.quantity === 2);
+    expect(custom).toMatchObject({ unitPrice: "24.00", variantName: "Completo", productName: "Espetinho" });
+    expect(describeItemOptions(custom?.options ?? [])).toBe("sem farofa, sem mandioca, Queijo coalho");
+    const standard = saved.items.find((item) => item.quantity === 1);
+    expect(describeItemOptions(standard?.options ?? [])).toBe("");
+
+    // O mesmo item padrão soma na mesma linha; acima do estoque é recusado sem baixar nada.
+    await upsertOrderItem(owner, order.id, { productId: espeto.id, quantity: 2, variantId: completo.id });
+    expect(await stock()).toBe(1);
+    await expect(
+      upsertOrderItem(owner, order.id, { productId: espeto.id, quantity: 3, variantId: simples.id }),
+    ).rejects.toMatchObject({ code: "out_of_stock" });
+    expect(await stock()).toBe(1);
+
+    // Retirar item e cancelar devolvem ao estoque.
+    await removeOrderItem(owner, order.id, standard!.id);
+    expect(await stock()).toBe(3);
+    await cancelOrder(owner, order.id);
+    expect(await stock()).toBe(5);
+
+    // Pizza: sabores com preço próprio, mínimo 1 e máximo 2.
+    const pizza = await createProduct(owner, { categoryId: category.id, name: "Pizza", price: "40", stockQuantity: 3 });
+    const [flavors] = await db
+      .insert(productOptionGroups)
+      .values({ establishmentId, productId: pizza.id, name: "Sabores", minSelect: 1, maxSelect: 2 })
+      .returning();
+    const [calabresa, portuguesa, camarao] = await db
+      .insert(productOptions)
+      .values([
+        { establishmentId, groupId: flavors.id, name: "Calabresa", sortOrder: 0 },
+        { establishmentId, groupId: flavors.id, name: "Portuguesa", price: "5.00", sortOrder: 1 },
+        { establishmentId, groupId: flavors.id, name: "Camarão", price: "15.00", sortOrder: 2 },
+      ])
+      .returning();
+    await expect(
+      createWaiterOrder(owner, { tableId: table.id, items: [{ productId: pizza.id, quantity: 1 }] }),
+    ).rejects.toMatchObject({ code: "invalid_options" });
+    await expect(
+      createWaiterOrder(owner, {
+        tableId: table.id,
+        items: [{ productId: pizza.id, quantity: 1, optionIds: [calabresa.id, portuguesa.id, camarao.id] }],
+      }),
+    ).rejects.toMatchObject({ code: "invalid_options" });
+    const half = await createWaiterOrder(owner, {
+      tableId: table.id,
+      items: [{ productId: pizza.id, quantity: 1, optionIds: [calabresa.id, portuguesa.id] }],
+    });
+    expect(half.totalAmount).toBe("45.00");
+
+    // Observação fica no item; a mesma escolha com outra observação vira outra linha.
+    const noted = await createWaiterOrder(owner, {
+      tableId: table.id,
+      items: [
+        { productId: pizza.id, quantity: 1, optionIds: [calabresa.id], notes: "Sem cebola" },
+        { productId: pizza.id, quantity: 1, optionIds: [calabresa.id] },
+      ],
+    });
+    const notedItems = (await getOrder(establishmentId, noted.id)).items;
+    expect(notedItems).toHaveLength(2);
+    expect(notedItems.map((item) => item.notes).sort()).toEqual(["Sem cebola", null].sort());
+    await cancelOrder(owner, noted.id);
+
+    // Esgotado.
+    await expect(
+      createWaiterOrder(owner, {
+        tableId: table.id,
+        items: [{ productId: pizza.id, quantity: 3, optionIds: [calabresa.id] }],
+      }),
+    ).rejects.toMatchObject({ code: "out_of_stock" });
+  });
+
+  it("salva variações e opções pelo painel preservando os ids", async () => {
+    const store = await openStore("cadastro-opcoes");
+    const owner = actor(store, "owner");
+    const other = await openStore("cadastro-outra");
+    const category = await createCategory(owner, "Lanches");
+    const burger = await createProduct(owner, { categoryId: category.id, name: "Hambúrguer", price: "30", stockQuantity: 5 });
+
+    await expect(
+      saveProductConfig(actor(store, "waiter"), burger.id, { variants: [], groups: [] }),
+    ).rejects.toMatchObject({ code: "forbidden" });
+    await expect(
+      saveProductConfig(actor(other, "owner"), burger.id, { variants: [], groups: [] }),
+    ).rejects.toMatchObject({ code: "not_found" });
+
+    const first = await saveProductConfig(owner, burger.id, {
+      variants: [
+        { key: "a", name: "Simples", price: "25,00", isAvailable: true },
+        { key: "b", name: "Duplo", price: "32,50", isAvailable: true },
+      ],
+      groups: [
+        {
+          variantKey: null,
+          name: "Ingredientes",
+          minSelect: 0,
+          maxSelect: 3,
+          options: [
+            { name: "Alface", price: "9", isDefault: true, isAvailable: true },
+            { name: "Tomate", price: "", isDefault: true, isAvailable: true },
+            { name: "Cebola", price: "", isDefault: true, isAvailable: true },
+          ],
+        },
+        {
+          variantKey: "b",
+          name: "Adicionais",
+          minSelect: 0,
+          maxSelect: 2,
+          options: [
+            { name: "Bacon", price: "4,00", isDefault: false, isAvailable: true },
+            { name: "Ovo", price: "2", isDefault: false, isAvailable: true },
+          ],
+        },
+      ],
+    });
+    expect(first.variants.map((variant) => variant.name)).toEqual(["Simples", "Duplo"]);
+    expect(first.groups[1]).toMatchObject({ variantId: first.variants[1].id, name: "Adicionais" });
+    // Incluso não tem preço; o produto passa a custar "a partir de" R$ 25.
+    expect(first.groups[0].options[0].price).toBe("0.00");
+    const [saved] = await db.select({ price: products.price }).from(products).where(eq(products.id, burger.id));
+    expect(saved.price).toBe("25.00");
+
+    // Editar mantém ids, remove o que saiu e insere o que entrou.
+    const [simples, duplo] = first.variants;
+    const [ingredients, extras] = first.groups;
+    const second = await saveProductConfig(owner, burger.id, {
+      variants: [{ key: duplo.id, id: duplo.id, name: "Duplo", price: "34", isAvailable: true }],
+      groups: [
+        {
+          id: extras.id,
+          variantKey: null,
+          name: "Adicionais",
+          minSelect: 0,
+          maxSelect: 2,
+          options: [
+            { id: extras.options[0].id, name: "Bacon", price: "5", isDefault: false, isAvailable: false },
+            { name: "Cheddar", price: "3", isDefault: false, isAvailable: true },
+          ],
+        },
+      ],
+    });
+    expect(second.variants).toEqual([{ id: duplo.id, name: "Duplo", price: "34.00", isAvailable: true }]);
+    expect(second.groups).toHaveLength(1);
+    expect(second.groups[0].id).toBe(extras.id);
+    expect(second.groups[0].variantId).toBeNull();
+    expect(second.groups[0].options.map((option) => [option.name, option.price, option.isAvailable])).toEqual([
+      ["Bacon", "5.00", false],
+      ["Cheddar", "3.00", true],
+    ]);
+    expect(second.groups[0].options[0].id).toBe(extras.options[0].id);
+    expect(
+      await db.select().from(productOptionGroups).where(eq(productOptionGroups.id, ingredients.id)),
+    ).toHaveLength(0);
+    expect(await db.select().from(productVariants).where(eq(productVariants.id, simples.id))).toHaveLength(0);
+
+    // Regras de cadastro.
+    const invalid = (groups: Parameters<typeof saveProductConfig>[2]["groups"]) =>
+      saveProductConfig(owner, burger.id, { variants: [], groups });
+    await expect(
+      invalid([{ variantKey: null, name: "Vazio", minSelect: 0, maxSelect: 1, options: [] }]),
+    ).rejects.toMatchObject({ code: "invalid_config" });
+    await expect(
+      invalid([
+        {
+          variantKey: null,
+          name: "Sabores",
+          minSelect: 1,
+          maxSelect: 3,
+          options: [{ name: "Calabresa", price: "", isDefault: false, isAvailable: true }],
+        },
+      ]),
+    ).rejects.toMatchObject({ code: "invalid_config" });
+    await expect(
+      saveProductConfig(owner, burger.id, {
+        variants: [{ key: "x", name: "Grande", price: "", isAvailable: true }],
+        groups: [],
+      }),
+    ).rejects.toMatchObject({ code: "invalid_price" });
+    // Id de opção de outro grupo/produto é recusado.
+    await expect(
+      invalid([
+        {
+          id: extras.id,
+          variantKey: null,
+          name: "Adicionais",
+          minSelect: 0,
+          maxSelect: 1,
+          options: [{ id: ingredients.options[0].id, name: "X", price: "", isDefault: false, isAvailable: true }],
+        },
+      ]),
+    ).rejects.toMatchObject({ code: "invalid_config" });
+
+    // Sem variações e sem grupos: produto volta a ser simples.
+    const cleared = await saveProductConfig(owner, burger.id, { variants: [], groups: [] });
+    expect(cleared).toEqual({ variants: [], groups: [] });
   });
 
   it("autentica clientes por loja com sessão própria", async () => {

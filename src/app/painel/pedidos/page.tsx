@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { itemDetail, itemTitle } from "@/lib/order-item-options";
 import { connection } from "next/server";
 
 import { OrdersBoard, type BoardOrder } from "@/components/orders/orders-board";
@@ -75,7 +76,8 @@ function toBoardOrder(order: Awaited<ReturnType<typeof listActiveOrders>>[number
         : null,
     items: order.items.map((item) => ({
       id: item.id,
-      productName: item.productName,
+      productName: itemTitle(item),
+      detail: itemDetail(item),
       quantity: item.quantity,
       unitPrice: item.unitPrice,
     })),

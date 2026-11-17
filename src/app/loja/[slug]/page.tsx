@@ -3,7 +3,10 @@ import { connection } from "next/server";
 import { notFound } from "next/navigation";
 
 import { Storefront, type StorefrontCategory } from "@/components/storefront/storefront";
+import { db } from "@/lib/db";
+import { emptyConfig } from "@/lib/product-config";
 import { listCategories, listProducts } from "@/modules/catalog/service";
+import { loadProductConfigs } from "@/modules/catalog/variations";
 import { getDeliverySettings } from "@/modules/delivery/service";
 import { getStoreAndCustomer } from "@/server/customer-session";
 
@@ -29,6 +32,10 @@ async function Store({ params }: { params: Promise<{ slug: string }> }) {
     listProducts(store.id, true),
     getDeliverySettings(store.id),
   ]);
+  const configs = await loadProductConfigs(
+    db,
+    products.map((product) => product.id),
+  );
 
   const groups: StorefrontCategory[] = categories
     .map((category) => ({
@@ -41,6 +48,8 @@ async function Store({ params }: { params: Promise<{ slug: string }> }) {
           name: product.name,
           description: product.description,
           price: Number(product.price),
+          stockQuantity: product.stockQuantity,
+          config: configs.get(product.id) ?? emptyConfig,
         })),
     }))
     .filter((category) => category.products.length > 0);

@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { itemTitle } from "@/lib/order-item-options";
 import Link from "next/link";
 
 import { LiveRefresh } from "@/components/shared/live-refresh";
@@ -55,7 +56,7 @@ async function CustomerOrders({ params }: PageProps<"/loja/[slug]/pedidos">) {
                   <StatusBadge status={order.status} />
                 </div>
                 <p className="line-clamp-1 text-body-compact text-on-surface-variant">
-                  {order.items.map((item) => `${item.quantity}× ${item.productName}`).join(", ")}
+                  {order.items.map((item) => `${item.quantity}× ${itemTitle(item)}`).join(", ")}
                 </p>
                 <div className="flex items-center justify-between text-label-regular text-on-surface-variant">
                   <span>{dateFormat.format(order.createdAt)}</span>

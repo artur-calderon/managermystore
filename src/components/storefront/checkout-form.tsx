@@ -5,14 +5,14 @@ import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 
 import { Icon } from "@/components/ui/icon";
+import { itemTitle } from "@/lib/order-item-options";
 import { paymentMethodIcons, paymentMethodLabels, type PaymentMethod } from "@/lib/payment-methods";
 import { placeDeliveryOrderAction } from "@/modules/customers/actions";
 
 import { AddressForm, storeInputClass } from "./address-form";
-import { useCart } from "./use-cart";
+import { resolveCart, unitsOf, useCart, type CartProduct } from "./use-cart";
 
 type Address = { id: string; label: string | null; text: string };
-type Product = { id: string; name: string; price: number };
 
 const money = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 
@@ -33,7 +33,7 @@ export function CheckoutForm({
   fee: number;
   paymentMethods: PaymentMethod[];
   addresses: Address[];
-  products: Product[];
+  products: CartProduct[];
 }) {
   const router = useRouter();
   const { cart, setQuantity, clear } = useCart(slug);
@@ -46,17 +46,16 @@ export function CheckoutForm({
   const [sending, startSending] = useTransition();
 
   const productsById = useMemo(() => new Map(products.map((product) => [product.id, product])), [products]);
-  const lines = Object.entries(cart)
-    .map(([productId, quantity]) => ({ product: productsById.get(productId), quantity }))
-    .filter((line): line is { product: Product; quantity: number } => Boolean(line.product));
-  const unavailable = Object.keys(cart).filter((productId) => !productsById.has(productId)).length;
-  const subtotal = lines.reduce((sum, line) => sum + line.quantity * line.product.price, 0);
+  const { lines, missing: unavailable } = resolveCart(cart, productsById);
+  const hasProblem = lines.some((line) => line.problem);
+  const subtotal = lines.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0);
   const total = subtotal + fee;
 
   function submit() {
     setError(null);
     if (!addressId) return setError("Escolha ou cadastre um endereço de entrega.");
     if (!payment) return setError("Escolha a forma de pagamento.");
+    if (hasProblem) return setError("Revise os itens marcados no carrinho antes de enviar.");
 
     startSending(async () => {
       const result = await placeDeliveryOrderAction(slug, {
@@ -64,7 +63,13 @@ export function CheckoutForm({
         paymentMethod: payment,
         changeFor: payment === "cash" ? changeFor : undefined,
         notes,
-        items: lines.map((line) => ({ productId: line.product.id, quantity: line.quantity })),
+        items: lines.map((line) => ({
+          productId: line.product.id,
+          quantity: line.quantity,
+          variantId: line.variantId,
+          optionIds: line.optionIds,
+          note: line.note,
+        })),
       });
 
       if (result.error || !result.orderId) {
@@ -103,16 +108,19 @@ export function CheckoutForm({
 
       <Section icon="shopping_bag" title="Itens">
         <ul className="flex flex-col divide-y divide-surface-container">
-          {lines.map(({ product, quantity }) => (
-            <li key={product.id} className="flex items-center gap-2 py-2.5">
+          {lines.map(({ key, product, quantity, variantName, summary, note, problem, unitPrice, productId }) => (
+            <li key={key} className="flex items-center gap-2 py-2.5">
               <div className="min-w-0 flex-1">
-                <p className="truncate text-body-medium text-on-surface">{product.name}</p>
-                <p className="text-label-regular text-on-surface-variant">{money.format(product.price * quantity)}</p>
+                <p className="text-body-medium text-on-surface">{itemTitle({ productName: product.name, variantName })}</p>
+                {summary ? <p className="text-label-regular text-primary">{summary}</p> : null}
+                {note ? <p className="text-label-regular text-on-surface-variant">Obs.: {note}</p> : null}
+                {problem ? <p className="text-label-regular text-error">{problem} Remova e escolha de novo.</p> : null}
+                <p className="text-label-regular text-on-surface-variant">{money.format(unitPrice * quantity)}</p>
               </div>
               <div className="flex shrink-0 items-center rounded-lg bg-surface-container-low p-0.5">
                 <button
                   type="button"
-                  onClick={() => setQuantity(product.id, quantity - 1)}
+                  onClick={() => setQuantity(key, quantity - 1)}
                   aria-label={quantity === 1 ? `Remover ${product.name}` : `Diminuir ${product.name}`}
                   className="flex size-9 items-center justify-center rounded-md bg-surface-container-lowest text-on-surface shadow-xs"
                 >
@@ -121,9 +129,10 @@ export function CheckoutForm({
                 <span className="w-7 text-center text-metric-table font-semibold">{quantity}</span>
                 <button
                   type="button"
-                  onClick={() => setQuantity(product.id, quantity + 1)}
+                  onClick={() => setQuantity(key, quantity + 1)}
+                  disabled={unitsOf(lines, productId) >= Math.min(99, product.stockQuantity)}
                   aria-label={`Aumentar ${product.name}`}
-                  className="flex size-9 items-center justify-center rounded-md bg-primary text-on-primary shadow-xs"
+                  className="flex size-9 items-center justify-center rounded-md bg-primary text-on-primary shadow-xs disabled:opacity-40"
                 >
                   <Icon name="add" className="text-[16px]" />
                 </button>
@@ -249,7 +258,7 @@ export function CheckoutForm({
       <button
         type="button"
         onClick={submit}
-        disabled={!canOrder || sending || addingAddress}
+        disabled={!canOrder || sending || addingAddress || hasProblem}
         className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-primary-container text-headline-sm text-on-primary-container shadow-md transition-opacity disabled:opacity-50"
       >
         <Icon name={sending ? "progress_activity" : "send"} className={`text-[20px] ${sending ? "animate-spin" : ""}`} />

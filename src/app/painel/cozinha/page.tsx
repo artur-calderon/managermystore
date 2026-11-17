@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { connection } from "next/server";
 
 import { LiveRefresh } from "@/components/shared/live-refresh";
+import { itemDetail, itemTitle } from "@/lib/order-item-options";
 import { BoundForm, SubmitButton } from "@/components/shared/form";
 import { advanceOrderAction } from "@/modules/orders/actions";
 import { listActiveOrders } from "@/modules/orders/service";
@@ -40,7 +41,10 @@ async function Kitchen() {
           <ul>
             {order.items.map((item) => (
               <li key={item.id}>
-                {item.quantity} × {item.productName}
+                <strong>
+                  {item.quantity} × {itemTitle(item)}
+                </strong>
+                {itemDetail(item) ? <p className="pl-4 text-primary">{itemDetail(item)}</p> : null}
               </li>
             ))}
           </ul>

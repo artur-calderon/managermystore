@@ -5,6 +5,7 @@ import {
   foreignKey,
   index,
   integer,
+  jsonb,
   numeric,
   pgTable,
   text,
@@ -14,6 +15,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
+import type { OrderItemOption } from "../../order-item-options";
 import { customers } from "./customers";
 import { establishmentMembers, establishments } from "./tenancy";
 
@@ -79,6 +81,106 @@ export const products = pgTable(
     check("products_price_check", sql`${table.price} >= 0`),
     check("products_cost_price_check", sql`${table.costPrice} is null or ${table.costPrice} >= 0`),
     check("products_stock_quantity_check", sql`${table.stockQuantity} >= 0`),
+  ],
+);
+
+/**
+ * Variações de um produto (ex.: Simples/Completo, Pequena/Média/Grande). Escolha única;
+ * quando o produto tem variações, o preço do item é o da variação escolhida.
+ */
+export const productVariants = pgTable(
+  "product_variants",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    establishmentId: uuid("establishment_id").notNull(),
+    productId: uuid("product_id").notNull(),
+    name: text("name").notNull(),
+    price: money("price").notNull(),
+    isAvailable: boolean("is_available").notNull().default(true),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    unique("product_variants_product_id_key").on(table.productId, table.id),
+    foreignKey({
+      columns: [table.establishmentId, table.productId],
+      foreignColumns: [products.establishmentId, products.id],
+      name: "product_variants_product_establishment_fk",
+    }).onDelete("cascade"),
+    index("product_variants_product_idx").on(table.productId, table.sortOrder),
+    check("product_variants_price_check", sql`${table.price} >= 0`),
+  ],
+);
+
+/**
+ * Grupo de opções (ex.: Acompanhamentos, Sabores, Adicionais, Ponto da carne).
+ * Sem `variantId` vale para o produto todo; com ele, só aparece naquela variação.
+ */
+export const productOptionGroups = pgTable(
+  "product_option_groups",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    establishmentId: uuid("establishment_id").notNull(),
+    productId: uuid("product_id").notNull(),
+    variantId: uuid("variant_id"),
+    name: text("name").notNull(),
+    minSelect: integer("min_select").notNull().default(0),
+    maxSelect: integer("max_select").notNull().default(1),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    unique("product_option_groups_establishment_id_key").on(table.establishmentId, table.id),
+    foreignKey({
+      columns: [table.establishmentId, table.productId],
+      foreignColumns: [products.establishmentId, products.id],
+      name: "product_option_groups_product_establishment_fk",
+    }).onDelete("cascade"),
+    // A variação precisa ser do mesmo produto.
+    foreignKey({
+      columns: [table.productId, table.variantId],
+      foreignColumns: [productVariants.productId, productVariants.id],
+      name: "product_option_groups_variant_fk",
+    }).onDelete("cascade"),
+    index("product_option_groups_product_idx").on(table.productId, table.sortOrder),
+    check(
+      "product_option_groups_select_check",
+      sql`${table.minSelect} >= 0 and ${table.maxSelect} >= 1 and ${table.minSelect} <= ${table.maxSelect}`,
+    ),
+  ],
+);
+
+/**
+ * Opção de um grupo. `isDefault` = já vem incluída (o cliente pode tirar; tirar não baixa o preço).
+ * `price` é cobrado só quando a opção é escolhida e não vem incluída.
+ */
+export const productOptions = pgTable(
+  "product_options",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    establishmentId: uuid("establishment_id").notNull(),
+    groupId: uuid("group_id").notNull(),
+    name: text("name").notNull(),
+    price: money("price").notNull().default("0"),
+    isDefault: boolean("is_default").notNull().default(false),
+    isAvailable: boolean("is_available").notNull().default(true),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.establishmentId, table.groupId],
+      foreignColumns: [productOptionGroups.establishmentId, productOptionGroups.id],
+      name: "product_options_group_establishment_fk",
+    }).onDelete("cascade"),
+    index("product_options_group_idx").on(table.groupId, table.sortOrder),
+    check("product_options_price_check", sql`${table.price} >= 0`),
   ],
 );
 
@@ -244,7 +346,15 @@ export const orderItems = pgTable(
     productId: uuid("product_id").notNull(),
     productName: text("product_name").notNull(),
     quantity: integer("quantity").notNull(),
+    // Preço unitário já com a variação e os adicionais cobrados.
     unitPrice: money("unit_price").notNull(),
+    // Cópia da variação e das opções no momento do pedido (editar o produto não altera pedidos).
+    variantId: uuid("variant_id").references(() => productVariants.id, { onDelete: "set null" }),
+    variantName: text("variant_name"),
+    options: jsonb("options").$type<OrderItemOption[]>().notNull().default(sql`'[]'::jsonb`),
+    notes: text("notes"),
+    // Identifica a configuração (variação + opções + observação); "" para o produto simples.
+    configKey: text("config_key").notNull().default(""),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" })
       .notNull()
       .defaultNow(),
@@ -253,7 +363,7 @@ export const orderItems = pgTable(
       .defaultNow(),
   },
   (table) => [
-    unique("order_items_order_product_key").on(table.orderId, table.productId),
+    unique("order_items_order_product_config_key").on(table.orderId, table.productId, table.configKey),
     foreignKey({
       columns: [table.establishmentId, table.orderId],
       foreignColumns: [orders.establishmentId, orders.id],

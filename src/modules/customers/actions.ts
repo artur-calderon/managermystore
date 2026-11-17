@@ -136,7 +136,7 @@ export async function placeDeliveryOrderAction(
     paymentMethod: string;
     changeFor?: string;
     notes?: string;
-    items: { productId: string; quantity: number }[];
+    items: { productId: string; quantity: number; variantId?: string | null; optionIds?: string[]; note?: string }[];
   },
 ): Promise<{ error?: string; orderId?: string }> {
   try {
@@ -149,7 +149,10 @@ export async function placeDeliveryOrderAction(
       return { error: parsed.error.issues[0]?.message ?? "Dados do pedido inválidos." };
     }
 
-    const order = await createDeliveryOrder(customer, parsed.data);
+    const order = await createDeliveryOrder(customer, {
+      ...parsed.data,
+      items: parsed.data.items.map(({ note, ...item }) => ({ ...item, notes: note })),
+    });
     revalidatePath("/painel/pedidos");
     revalidatePath(`/loja/${slug}/pedidos`);
     return { orderId: order.id };

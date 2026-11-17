@@ -2,11 +2,12 @@
 
 import { revalidatePath } from "next/cache";
 
-import { productSchema } from "@/lib/validations/forms";
+import { productConfigSchema, productSchema } from "@/lib/validations/forms";
 import { requireActor } from "@/server/context";
 import { actionError, type ActionState } from "@/server/action";
 
 import { createCategory, createProduct, deactivateCategory, deactivateProduct, updateCategory, updateProduct } from "./service";
+import { saveProductConfig, type ConfigInput } from "./variations-admin";
 
 function revalidateCatalog() {
   revalidatePath("/painel/produtos");
@@ -91,6 +92,26 @@ export async function updateProductAction(_state: ActionState, formData: FormDat
     return { success: "Produto atualizado." };
   } catch (error) {
     return actionError(error);
+  }
+}
+
+export async function saveProductConfigAction(
+  productId: string,
+  input: ConfigInput,
+): Promise<{ error?: string; success?: string }> {
+  const parsed = productConfigSchema.safeParse(input);
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Dados inválidos." };
+  }
+
+  try {
+    const actor = await requireActor();
+    await saveProductConfig(actor, productId, parsed.data);
+    revalidateCatalog();
+    revalidatePath("/garcom");
+    return { success: "Variações e opções salvas." };
+  } catch (error) {
+    return actionError(error) ?? { error: "Não foi possível salvar as opções." };
   }
 }
 

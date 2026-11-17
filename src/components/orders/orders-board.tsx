@@ -18,7 +18,10 @@ import { formatMoney } from "@/server/money";
 
 export type BoardItem = {
   id: string;
+  /** Produto já com a variação (ex.: "Espetinho Completo"). */
   productName: string;
+  /** Opções fora do padrão e observação do item. */
+  detail: string;
   quantity: number;
   unitPrice: string;
 };
@@ -110,7 +113,7 @@ export function OrdersBoard({
         order.tableName,
         order.customerName,
         order.notes,
-        ...order.items.map((item) => item.productName),
+        ...order.items.map((item) => `${item.productName} ${item.detail}`),
       ]
         .filter(Boolean)
         .join(" ")
@@ -363,6 +366,7 @@ export function OrdersBoard({
                       <p className="text-body-compact font-semibold text-on-surface">
                         {item.quantity}× {item.productName}
                       </p>
+                      {item.detail ? <p className="text-label-regular text-primary">{item.detail}</p> : null}
                       <p className="text-label-micro text-outline">{formatMoney(item.unitPrice)}</p>
                     </div>
                     <div className="flex items-center gap-2">
@@ -542,7 +546,9 @@ function placeLabel(order: BoardOrder) {
 }
 
 function summary(order: BoardOrder) {
-  return order.items.map((item) => `${item.quantity}x ${item.productName}`).join(", ");
+  return order.items
+    .map((item) => `${item.quantity}x ${item.productName}${item.detail ? ` (${item.detail})` : ""}`)
+    .join(", ");
 }
 
 function ageLabel(order: BoardOrder, now: string, timeZone: string) {

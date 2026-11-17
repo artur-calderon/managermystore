@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { itemDetail, itemTitle } from "@/lib/order-item-options";
 import { notFound } from "next/navigation";
 
 import { LiveRefresh } from "@/components/shared/live-refresh";
@@ -69,7 +70,10 @@ async function CustomerOrder({ params }: PageProps<"/loja/[slug]/pedidos/[id]">)
             {order.items.map((item) => (
               <li key={item.id} className="flex justify-between gap-2 py-2 text-body-compact">
                 <span className="text-on-surface">
-                  {item.quantity}× {item.productName}
+                  {item.quantity}× {itemTitle(item)}
+                  {itemDetail(item) ? (
+                    <span className="block text-label-regular text-on-surface-variant">{itemDetail(item)}</span>
+                  ) : null}
                 </span>
                 <span className="text-on-surface-variant">{formatMoney(String(item.quantity * Number(item.unitPrice)))}</span>
               </li>

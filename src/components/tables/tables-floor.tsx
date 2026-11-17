@@ -18,6 +18,7 @@ import { formatMoney } from "@/server/money";
 export type FloorItem = {
   id: string;
   productName: string;
+  detail: string;
   quantity: number;
   unitPrice: string;
 };
@@ -288,6 +289,7 @@ function TableDetail({
                 <li key={item.id} className="flex items-start justify-between gap-3 py-2">
                   <span className="text-body-compact text-on-surface">
                     {item.quantity}x {item.productName}
+                    {item.detail ? <span className="block text-label-regular text-primary">{item.detail}</span> : null}
                   </span>
                   <span className="flex items-center gap-2">
                     <span className="text-body-compact font-medium">

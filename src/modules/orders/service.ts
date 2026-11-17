@@ -1,6 +1,6 @@
-import { and, count, desc, eq, inArray, isNull, max } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNull, max, sql } from "drizzle-orm";
 
-import { db } from "@/lib/db";
+import { db, type Tx } from "@/lib/db";
 import {
   deliverySettings,
   diningTables,
@@ -11,6 +11,7 @@ import {
   type PaymentMethod,
 } from "@/lib/db/schema";
 import { activeOrderStatuses, type OrderStatus } from "@/lib/db/schema";
+import { loadProductConfig, resolveItemSelection, type ItemSelection } from "@/modules/catalog/variations";
 import { formatAddress, getAddress, type Customer } from "@/modules/customers/service";
 import type { Actor } from "@/modules/tenancy/service";
 import { assertCan } from "@/server/authorization";
@@ -25,7 +26,12 @@ const kitchenTransitions: Partial<Record<OrderStatus, OrderStatus>> = {
   preparing: "ready",
 };
 
-export type ItemInput = { productId: string; quantity: number };
+export type ItemInput = { productId: string; quantity: number } & ItemSelection;
+
+/** Ordena por produto para que transações concorrentes travem os produtos sempre na mesma ordem. */
+function byProduct<T extends { productId: string }>(items: readonly T[]) {
+  return [...items].sort((a, b) => a.productId.localeCompare(b.productId));
+}
 
 const deliveryColumns = {
   customerPhone: orders.customerPhone,
@@ -141,8 +147,8 @@ export async function createWaiterOrder(
       })
       .returning();
 
-    for (const item of input.items ?? []) {
-      await addItem(tx, actor.establishmentId, order.id, item);
+    for (const item of byProduct(input.items ?? [])) {
+      await addItem(tx, actor.establishmentId, order.id, item, "add");
     }
 
     const totalAmount = await recomputeTotal(tx, actor.establishmentId, order.id);
@@ -172,8 +178,8 @@ export async function createCatalogOrder(
       })
       .returning();
 
-    for (const item of input.items) {
-      await addItem(tx, establishment.id, order.id, item, true);
+    for (const item of byProduct(input.items)) {
+      await addItem(tx, establishment.id, order.id, item, "add");
     }
 
     const totalAmount = await recomputeTotal(tx, establishment.id, order.id);
@@ -255,15 +261,12 @@ export async function createDeliveryOrder(
       })
       .returning();
 
-    const quantities = new Map<string, number>();
-    for (const item of input.items) {
-      quantities.set(item.productId, (quantities.get(item.productId) ?? 0) + item.quantity);
-    }
-    for (const [productId, quantity] of quantities) {
+    for (const item of byProduct(input.items)) {
+      // Itens iguais (mesma variação/opções) são somados na mesma linha.
+      const quantity = await addItem(tx, customer.establishmentId, order.id, item, "add");
       if (quantity > 99) {
         throw new AppError("invalid_quantity", "Quantidade máxima por item: 99.");
       }
-      await addItem(tx, customer.establishmentId, order.id, { productId, quantity });
     }
 
     const totalAmount = await recomputeTotal(tx, customer.establishmentId, order.id);
@@ -319,7 +322,7 @@ export async function upsertOrderItem(actor: Actor, orderId: string, item: ItemI
 
   return transaction(async (tx) => {
     const order = await lockPendingOrder(tx, actor.establishmentId, orderId);
-    await addItem(tx, actor.establishmentId, order.id, item);
+    await addItem(tx, actor.establishmentId, order.id, item, "set");
     const totalAmount = await recomputeTotal(tx, actor.establishmentId, order.id);
     return { orderId: order.id, totalAmount };
   });
@@ -344,6 +347,7 @@ export async function removeOrderItem(actor: Actor, orderId: string, itemId: str
     if (removed.length === 0) {
       throw new AppError("not_found", "Item não encontrado.");
     }
+    await restoreStock(tx, actor.establishmentId, removed);
 
     const totalAmount = await recomputeTotal(tx, actor.establishmentId, order.id);
     return { orderId: order.id, totalAmount };
@@ -410,6 +414,13 @@ export async function cancelOrder(actor: Actor, orderId: string) {
       .set({ status: "cancelled", closedAt: new Date() })
       .where(eq(orders.id, order.id))
       .returning();
+
+    // Cancelou: o que tinha saído do estoque volta.
+    const items = await tx
+      .select({ productId: orderItems.productId, quantity: orderItems.quantity })
+      .from(orderItems)
+      .where(and(eq(orderItems.establishmentId, actor.establishmentId), eq(orderItems.orderId, order.id)));
+    await restoreStock(tx, actor.establishmentId, items);
 
     return updated;
   });
@@ -516,7 +527,7 @@ async function withItems<T extends { id: string }>(establishmentId: string, rows
 }
 
 async function lockOrder(
-  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  tx: Tx,
   establishmentId: string,
   orderId: string,
 ) {
@@ -534,7 +545,7 @@ async function lockOrder(
 }
 
 async function lockPendingOrder(
-  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  tx: Tx,
   establishmentId: string,
   orderId: string,
 ) {
@@ -547,17 +558,17 @@ async function lockPendingOrder(
   return order;
 }
 
-async function addItem(
-  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
-  establishmentId: string,
-  orderId: string,
-  item: ItemInput,
-  availableOnly = true,
-) {
+/**
+ * Inclui (ou atualiza) um item no pedido: valida variação/opções, calcula o preço no servidor e
+ * baixa o estoque do produto na mesma transação. `add` soma à linha igual existente; `set` define a
+ * quantidade (devolvendo ao estoque se diminuir). Devolve a quantidade final da linha.
+ */
+async function addItem(tx: Tx, establishmentId: string, orderId: string, item: ItemInput, mode: "add" | "set") {
   if (!Number.isInteger(item.quantity) || item.quantity <= 0) {
     throw new AppError("invalid_quantity", "A quantidade precisa ser um inteiro maior que zero.");
   }
 
+  // Trava a linha do produto: dois pedidos simultâneos não vendem a mesma unidade.
   const [product] = await tx
     .select()
     .from(products)
@@ -566,37 +577,96 @@ async function addItem(
         eq(products.id, item.productId),
         eq(products.establishmentId, establishmentId),
         isNull(products.deletedAt),
-        availableOnly ? eq(products.isAvailable, true) : undefined,
+        eq(products.isAvailable, true),
       ),
     )
-    .limit(1);
+    .limit(1)
+    .for("update");
 
   if (!product) {
     throw new AppError("not_found", "Produto não encontrado neste estabelecimento.");
   }
 
-  await tx
-    .insert(orderItems)
-    .values({
+  const resolved = resolveItemSelection(product, await loadProductConfig(tx, product.id), item);
+
+  const [existing] = await tx
+    .select({ id: orderItems.id, quantity: orderItems.quantity })
+    .from(orderItems)
+    .where(
+      and(
+        eq(orderItems.orderId, orderId),
+        eq(orderItems.productId, product.id),
+        eq(orderItems.configKey, resolved.configKey),
+      ),
+    )
+    .limit(1)
+    .for("update");
+
+  const previous = existing?.quantity ?? 0;
+  const quantity = mode === "add" ? previous + item.quantity : item.quantity;
+  const delta = quantity - previous;
+
+  if (delta > product.stockQuantity) {
+    throw new AppError("out_of_stock", stockMessage(product.name, product.stockQuantity));
+  }
+
+  if (delta !== 0) {
+    await tx
+      .update(products)
+      .set({ stockQuantity: sql`${products.stockQuantity} - ${delta}` })
+      .where(eq(products.id, product.id));
+  }
+
+  const values = {
+    quantity,
+    unitPrice: resolved.unitPrice,
+    productName: product.name,
+    variantId: resolved.variantId,
+    variantName: resolved.variantName,
+    options: resolved.options,
+    notes: resolved.notes,
+    updatedAt: new Date(),
+  };
+
+  if (existing) {
+    await tx.update(orderItems).set(values).where(eq(orderItems.id, existing.id));
+  } else {
+    await tx.insert(orderItems).values({
+      ...values,
       establishmentId,
       orderId,
       productId: product.id,
-      productName: product.name,
-      quantity: item.quantity,
-      unitPrice: product.price,
-    })
-    .onConflictDoUpdate({
-      target: [orderItems.orderId, orderItems.productId],
-      set: {
-        quantity: item.quantity,
-        unitPrice: product.price,
-        productName: product.name,
-      },
+      configKey: resolved.configKey,
     });
+  }
+
+  return quantity;
+}
+
+function stockMessage(name: string, stock: number) {
+  if (stock <= 0) {
+    return `${name} está esgotado.`;
+  }
+  return `Estoque insuficiente de ${name}: ${stock === 1 ? "resta 1 unidade" : `restam ${stock} unidades`}.`;
+}
+
+/** Devolve ao estoque as quantidades de itens retirados/cancelados. */
+async function restoreStock(tx: Tx, establishmentId: string, items: { productId: string; quantity: number }[]) {
+  const totals = new Map<string, number>();
+  for (const item of items) {
+    totals.set(item.productId, (totals.get(item.productId) ?? 0) + item.quantity);
+  }
+
+  for (const [productId, quantity] of [...totals].sort(([a], [b]) => a.localeCompare(b))) {
+    await tx
+      .update(products)
+      .set({ stockQuantity: sql`${products.stockQuantity} + ${quantity}` })
+      .where(and(eq(products.id, productId), eq(products.establishmentId, establishmentId)));
+  }
 }
 
 async function recomputeTotal(
-  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  tx: Tx,
   establishmentId: string,
   orderId: string,
 ) {

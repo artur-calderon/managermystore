@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { BoundForm, SubmitButton, fieldClassName } from "@/components/shared/form";
 import { Icon } from "@/components/ui/icon";
+import { ProductOptionsEditor, type EditorConfig } from "@/components/catalog/product-options-editor";
 import {
   createCategoryAction,
   createProductAction,
@@ -30,7 +31,19 @@ export type RegistryProduct = {
   isAvailable: boolean;
   categoryId: string;
   categoryName: string;
+  config: EditorConfig;
 };
+
+function configSummary(config: EditorConfig) {
+  const parts = [];
+  if (config.variants.length > 0) {
+    parts.push(`${config.variants.length} ${config.variants.length === 1 ? "variação" : "variações"}`);
+  }
+  if (config.groups.length > 0) {
+    parts.push(`${config.groups.length} ${config.groups.length === 1 ? "grupo de opções" : "grupos de opções"}`);
+  }
+  return parts.join(" · ");
+}
 
 export function ProductsRegistry({
   products,
@@ -48,6 +61,7 @@ export function ProductsRegistry({
   const [availabilityFilter, setAvailabilityFilter] = useState<"all" | "available" | "paused">("all");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [creatingCategory, setCreatingCategory] = useState(false);
+  const [optionsProductId, setOptionsProductId] = useState<string | null>(null);
   const [draftPrice, setDraftPrice] = useState("");
   const [draftCost, setDraftCost] = useState("");
   const nameRef = useRef<HTMLInputElement>(null);
@@ -56,6 +70,8 @@ export function ProductsRegistry({
   const availableCount = products.filter((product) => product.isAvailable).length;
   const pausedCount = totalCount - availableCount;
   const editing = products.find((product) => product.id === editingId) ?? null;
+  const optionsProduct = products.find((product) => product.id === optionsProductId) ?? null;
+  const editingHasVariants = (editing?.config.variants.length ?? 0) > 0;
   const draftMarginLabel = marginPercentLabel(draftPrice, draftCost);
 
   const visible = useMemo(() => {
@@ -253,6 +269,12 @@ export function ProductsRegistry({
                           {product.description ? (
                             <span className="truncate text-label-micro text-outline">{product.description}</span>
                           ) : null}
+                          {configSummary(product.config) ? (
+                            <span className="mt-0.5 inline-flex w-fit items-center gap-1 text-label-micro text-tertiary">
+                              <Icon name="tune" className="text-[13px]" />
+                              {configSummary(product.config)}
+                            </span>
+                          ) : null}
                         </div>
                       </td>
                       <td className="px-3 py-2.5">
@@ -265,6 +287,9 @@ export function ProductsRegistry({
                           product.isAvailable ? "text-on-surface" : "text-outline"
                         }`}
                       >
+                        {product.config.variants.length > 0 ? (
+                          <span className="block text-label-micro font-normal text-outline">a partir de</span>
+                        ) : null}
                         {product.priceLabel}
                       </td>
                       <td className="px-3 py-2.5 text-right">
@@ -328,6 +353,14 @@ export function ProductsRegistry({
                               }}
                             >
                               <Icon name="edit" />
+                            </button>
+                            <button
+                              type="button"
+                              className="rounded p-1 text-outline transition-colors hover:bg-surface-container hover:text-primary"
+                              title="Variações e opções"
+                              onClick={() => setOptionsProductId(product.id)}
+                            >
+                              <Icon name="tune" />
                             </button>
                             <BoundForm action={setProductAvailabilityAction} className="inline">
                               <input type="hidden" name="productId" value={product.id} />
@@ -471,11 +504,13 @@ export function ProductsRegistry({
                         <div className="relative">
                           <span className="absolute top-2 left-2.5 text-label-micro text-outline">R$</span>
                           <input
-                            className={`${fieldClassName} pl-8 font-medium`}
+                            className={`${fieldClassName} pl-8 font-medium read-only:opacity-70`}
                             name="price"
                             placeholder="0,00"
                             value={draftPrice}
                             onChange={(event) => setDraftPrice(event.target.value)}
+                            readOnly={editingHasVariants}
+                            title={editingHasVariants ? "Definido pelas variações (menor preço)" : undefined}
                             required
                           />
                         </div>
@@ -518,6 +553,27 @@ export function ProductsRegistry({
                         required
                       />
                     </label>
+
+                    {editing ? (
+                      <button
+                        type="button"
+                        className="flex items-center justify-between gap-3 rounded-lg border border-outline-variant/40 p-space-sm text-left hover:border-primary"
+                        onClick={() => setOptionsProductId(editing.id)}
+                      >
+                        <span>
+                          <span className="block text-body-compact font-medium text-on-surface">Variações e opções</span>
+                          <span className="mt-0.5 block text-label-micro text-on-surface-variant">
+                            {configSummary(editing.config) || "Tamanhos, acompanhamentos, sabores, adicionais…"}
+                          </span>
+                        </span>
+                        <Icon name="chevron_right" className="text-outline" />
+                      </button>
+                    ) : null}
+                    {editingHasVariants ? (
+                      <p className="-mt-1 text-label-micro text-outline">
+                        Com variações, o preço de venda é o menor preço entre elas (&quot;a partir de&quot;).
+                      </p>
+                    ) : null}
 
                     <label className="grid gap-1 text-label-regular font-medium text-on-surface">
                       Descrição do cardápio
@@ -570,6 +626,17 @@ export function ProductsRegistry({
           </div>
         </div>
       </div>
+
+      {optionsProduct ? (
+        <ProductOptionsEditor
+          key={optionsProduct.id}
+          product={{ id: optionsProduct.id, name: optionsProduct.name, config: optionsProduct.config }}
+          others={products
+            .filter((product) => product.id !== optionsProduct.id)
+            .map((product) => ({ id: product.id, name: product.name, config: product.config }))}
+          onClose={() => setOptionsProductId(null)}
+        />
+      ) : null}
 
       <div className="flex items-start gap-space-sm rounded-xl bg-surface-container-low/70 p-space-md shadow-sm">
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-surface-container-lowest text-primary">
