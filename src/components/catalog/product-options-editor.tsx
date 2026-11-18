@@ -151,8 +151,8 @@ export function ProductOptionsEditor({
     }));
   }
 
-  function addGroup(preset: Preset) {
-    const base = { uid: uid("g"), variantKey: null };
+  function addGroup(preset: Preset, variantKey: string | null) {
+    const base = { uid: uid("g"), variantKey };
     const option = (name: string, isDefault = false): DraftOption => ({
       uid: uid("o"),
       name,
@@ -184,14 +184,211 @@ export function ProductOptionsEditor({
     }));
   }
 
-  function moveGroup(index: number, direction: -1 | 1) {
+  /** Troca o grupo de lugar com o vizinho da mesma seção (mesma variação). */
+  function moveGroup(groupUid: string, direction: -1 | 1) {
     setDraft((current) => {
-      const target = index + direction;
+      const index = current.groups.findIndex((group) => group.uid === groupUid);
+      if (index < 0) return current;
+      const variantKey = current.groups[index].variantKey;
+      let target = index + direction;
+      while (target >= 0 && target < current.groups.length && current.groups[target].variantKey !== variantKey) {
+        target += direction;
+      }
       if (target < 0 || target >= current.groups.length) return current;
       const groups = [...current.groups];
       [groups[index], groups[target]] = [groups[target], groups[index]];
       return { ...current, groups };
     });
+  }
+
+  const hasVariants = draft.variants.length > 0;
+  const sections: { key: string | null; title: string; subtitle: string }[] = hasVariants
+    ? [
+        {
+          key: null,
+          title: "Todas as variações",
+          subtitle: "Aparecem em qualquer variação escolhida",
+        },
+        ...draft.variants.map((variant) => {
+          const name = variant.name.trim() || "(sem nome)";
+          return {
+            key: variant.key,
+            title: `Só ${name}`,
+            subtitle: `Aparecem apenas em ${name}${variant.price ? ` · R$ ${variant.price}` : ""}`,
+          };
+        }),
+      ]
+    : [{ key: null, title: "", subtitle: "" }];
+  const groupCount = (variantKey: string | null) =>
+    draft.groups.filter((group) => group.variantKey === variantKey).length;
+
+  function renderGroup(group: DraftGroup, position: number, total: number) {
+    return (
+      <article key={group.uid} className="flex flex-col gap-2.5 rounded-xl border border-surface-container bg-surface-container-lowest p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            className={`${inputClass} min-w-40 flex-1 font-medium`}
+            placeholder="Nome do grupo (ex.: Acompanhamentos)"
+            value={group.name}
+            onChange={(event) => updateGroup(group.uid, (current) => ({ ...current, name: event.target.value }))}
+            aria-label="Nome do grupo"
+          />
+          <div className="flex items-center">
+            <IconButton
+              icon="arrow_upward"
+              label="Subir grupo"
+              disabled={position === 0}
+              onClick={() => moveGroup(group.uid, -1)}
+            />
+            <IconButton
+              icon="arrow_downward"
+              label="Descer grupo"
+              disabled={position === total - 1}
+              onClick={() => moveGroup(group.uid, 1)}
+            />
+            <RemoveButton
+              label="Remover grupo"
+              onClick={() =>
+                setDraft((current) => ({
+                  ...current,
+                  groups: current.groups.filter((item) => item.uid !== group.uid),
+                }))
+              }
+            />
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-end gap-3">
+          {hasVariants ? (
+            <label className="grid gap-1 text-label-regular text-on-surface-variant">
+              Mover para
+              <select
+                className={`${inputClass} w-40`}
+                value={group.variantKey ?? ""}
+                onChange={(event) =>
+                  updateGroup(group.uid, (current) => ({ ...current, variantKey: event.target.value || null }))
+                }
+              >
+                <option value="">Todas as variações</option>
+                {draft.variants.map((variant) => (
+                  <option key={variant.key} value={variant.key}>
+                    Só {variant.name || "(sem nome)"}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          <label className="grid gap-1 text-label-regular text-on-surface-variant">
+            Mínimo
+            <input
+              className={`${inputClass} w-16`}
+              type="number"
+              min={0}
+              value={group.minSelect}
+              onChange={(event) =>
+                updateGroup(group.uid, (current) => ({ ...current, minSelect: Number(event.target.value) || 0 }))
+              }
+            />
+          </label>
+          <label className="grid gap-1 text-label-regular text-on-surface-variant">
+            Máximo
+            <input
+              className={`${inputClass} w-16`}
+              type="number"
+              min={1}
+              value={group.maxSelect}
+              onChange={(event) =>
+                updateGroup(group.uid, (current) => ({ ...current, maxSelect: Number(event.target.value) || 1 }))
+              }
+            />
+          </label>
+          <span className="pb-1.5 text-label-regular font-medium text-tertiary">{ruleLabel(group)}</span>
+        </div>
+
+        <ul className="flex flex-col gap-1.5">
+          {group.options.map((option) => (
+            <li key={option.uid} className="flex flex-wrap items-center gap-2 rounded-lg bg-surface-container-low/60 p-1.5">
+              <input
+                className={`${inputClass} min-w-36 flex-1`}
+                placeholder="Nome da opção"
+                value={option.name}
+                onChange={(event) =>
+                  updateGroup(group.uid, (current) => ({
+                    ...current,
+                    options: current.options.map((item) =>
+                      item.uid === option.uid ? { ...item, name: event.target.value } : item,
+                    ),
+                  }))
+                }
+                aria-label="Nome da opção"
+              />
+              <label className="flex cursor-pointer items-center gap-1.5 text-label-regular text-on-surface-variant">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-primary"
+                  checked={option.isDefault}
+                  onChange={(event) =>
+                    updateGroup(group.uid, (current) => ({
+                      ...current,
+                      options: current.options.map((item) =>
+                        item.uid === option.uid ? { ...item, isDefault: event.target.checked } : item,
+                      ),
+                    }))
+                  }
+                />
+                Incluso
+              </label>
+              <div className="relative w-24">
+                <span className="absolute top-2 left-2 text-label-micro text-outline">+R$</span>
+                <input
+                  className={`${inputClass} pl-9 disabled:opacity-50`}
+                  inputMode="decimal"
+                  placeholder={option.isDefault ? "—" : "0,00"}
+                  disabled={option.isDefault}
+                  value={option.isDefault ? "" : option.price}
+                  onChange={(event) =>
+                    updateGroup(group.uid, (current) => ({
+                      ...current,
+                      options: current.options.map((item) =>
+                        item.uid === option.uid ? { ...item, price: event.target.value } : item,
+                      ),
+                    }))
+                  }
+                  aria-label="Preço adicional"
+                  title={option.isDefault ? "Itens inclusos já estão no preço do produto" : undefined}
+                />
+              </div>
+              <AvailabilityToggle
+                available={option.isAvailable}
+                onChange={(isAvailable) =>
+                  updateGroup(group.uid, (current) => ({
+                    ...current,
+                    options: current.options.map((item) => (item.uid === option.uid ? { ...item, isAvailable } : item)),
+                  }))
+                }
+              />
+              <RemoveButton
+                label="Remover opção"
+                onClick={() =>
+                  updateGroup(group.uid, (current) => ({
+                    ...current,
+                    options: current.options.filter((item) => item.uid !== option.uid),
+                  }))
+                }
+              />
+            </li>
+          ))}
+        </ul>
+        <button
+          type="button"
+          className="inline-flex w-fit items-center gap-1 rounded-lg px-2 py-1 text-body-compact font-medium text-primary hover:bg-primary-fixed/40"
+          onClick={() => addOption(group)}
+        >
+          <Icon name="add" />
+          Adicionar opção
+        </button>
+      </article>
+    );
   }
 
   function copyFrom(productId: string) {
@@ -306,6 +503,12 @@ export function ProductOptionsEditor({
                     aria-label="Preço da variação"
                   />
                 </div>
+                <span
+                  className="w-16 text-center text-label-micro text-outline"
+                  title="Grupos de opções exclusivos desta variação"
+                >
+                  {groupCount(variant.key) === 1 ? "1 grupo" : `${groupCount(variant.key)} grupos`}
+                </span>
                 <AvailabilityToggle
                   available={variant.isAvailable}
                   onChange={(isAvailable) => updateVariant(variant.key, { isAvailable })}
@@ -338,191 +541,50 @@ export function ProductOptionsEditor({
               </p>
             </div>
 
-            {draft.groups.map((group, index) => (
-              <article key={group.uid} className="flex flex-col gap-2.5 rounded-xl border border-surface-container p-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <input
-                    className={`${inputClass} min-w-40 flex-1 font-medium`}
-                    placeholder="Nome do grupo (ex.: Acompanhamentos)"
-                    value={group.name}
-                    onChange={(event) => updateGroup(group.uid, (current) => ({ ...current, name: event.target.value }))}
-                    aria-label="Nome do grupo"
-                  />
-                  <div className="flex items-center">
-                    <IconButton
-                      icon="arrow_upward"
-                      label="Subir grupo"
-                      disabled={index === 0}
-                      onClick={() => moveGroup(index, -1)}
-                    />
-                    <IconButton
-                      icon="arrow_downward"
-                      label="Descer grupo"
-                      disabled={index === draft.groups.length - 1}
-                      onClick={() => moveGroup(index, 1)}
-                    />
-                    <RemoveButton
-                      label="Remover grupo"
-                      onClick={() =>
-                        setDraft((current) => ({
-                          ...current,
-                          groups: current.groups.filter((item) => item.uid !== group.uid),
-                        }))
-                      }
-                    />
+            {sections.map((section) => {
+              const groups = draft.groups.filter((group) => group.variantKey === section.key);
+              const list = (
+                <>
+                  {groups.map((group, position) => renderGroup(group, position, groups.length))}
+                  <PresetButtons compact={hasVariants} onPick={(preset) => addGroup(preset, section.key)} />
+                </>
+              );
+              if (!hasVariants) {
+                return (
+                  <div key="all" className="flex flex-col gap-3">
+                    {list}
                   </div>
-                </div>
-
-                <div className="flex flex-wrap items-end gap-3">
-                  {draft.variants.length > 0 ? (
-                    <label className="grid gap-1 text-label-regular text-on-surface-variant">
-                      Vale para
-                      <select
-                        className={`${inputClass} w-40`}
-                        value={group.variantKey ?? ""}
-                        onChange={(event) =>
-                          updateGroup(group.uid, (current) => ({ ...current, variantKey: event.target.value || null }))
-                        }
-                      >
-                        <option value="">Todas as variações</option>
-                        {draft.variants.map((variant) => (
-                          <option key={variant.key} value={variant.key}>
-                            Só {variant.name || "(sem nome)"}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  ) : null}
-                  <label className="grid gap-1 text-label-regular text-on-surface-variant">
-                    Mínimo
-                    <input
-                      className={`${inputClass} w-16`}
-                      type="number"
-                      min={0}
-                      value={group.minSelect}
-                      onChange={(event) =>
-                        updateGroup(group.uid, (current) => ({ ...current, minSelect: Number(event.target.value) || 0 }))
-                      }
-                    />
-                  </label>
-                  <label className="grid gap-1 text-label-regular text-on-surface-variant">
-                    Máximo
-                    <input
-                      className={`${inputClass} w-16`}
-                      type="number"
-                      min={1}
-                      value={group.maxSelect}
-                      onChange={(event) =>
-                        updateGroup(group.uid, (current) => ({ ...current, maxSelect: Number(event.target.value) || 1 }))
-                      }
-                    />
-                  </label>
-                  <span className="pb-1.5 text-label-regular font-medium text-tertiary">{ruleLabel(group)}</span>
-                </div>
-
-                <ul className="flex flex-col gap-1.5">
-                  {group.options.map((option) => (
-                    <li key={option.uid} className="flex flex-wrap items-center gap-2 rounded-lg bg-surface-container-low/60 p-1.5">
-                      <input
-                        className={`${inputClass} min-w-36 flex-1`}
-                        placeholder="Nome da opção"
-                        value={option.name}
-                        onChange={(event) =>
-                          updateGroup(group.uid, (current) => ({
-                            ...current,
-                            options: current.options.map((item) =>
-                              item.uid === option.uid ? { ...item, name: event.target.value } : item,
-                            ),
-                          }))
-                        }
-                        aria-label="Nome da opção"
-                      />
-                      <label className="flex cursor-pointer items-center gap-1.5 text-label-regular text-on-surface-variant">
-                        <input
-                          type="checkbox"
-                          className="h-4 w-4 accent-primary"
-                          checked={option.isDefault}
-                          onChange={(event) =>
-                            updateGroup(group.uid, (current) => ({
-                              ...current,
-                              options: current.options.map((item) =>
-                                item.uid === option.uid ? { ...item, isDefault: event.target.checked } : item,
-                              ),
-                            }))
-                          }
+                );
+              }
+              const isAll = section.key === null;
+              return (
+                <div
+                  key={section.key ?? "all"}
+                  className={`flex flex-col gap-3 rounded-xl border-l-4 p-3 ${
+                    isAll ? "border-outline-variant bg-surface-container-low/40" : "border-primary bg-primary-fixed/15"
+                  }`}
+                >
+                  <div>
+                    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5">
+                      <div className="flex items-center gap-1.5">
+                        <Icon
+                          name={isAll ? "select_all" : "sell"}
+                          className={`text-[18px] ${isAll ? "text-outline" : "text-primary"}`}
                         />
-                        Incluso
-                      </label>
-                      <div className="relative w-24">
-                        <span className="absolute top-2 left-2 text-label-micro text-outline">+R$</span>
-                        <input
-                          className={`${inputClass} pl-9 disabled:opacity-50`}
-                          inputMode="decimal"
-                          placeholder={option.isDefault ? "—" : "0,00"}
-                          disabled={option.isDefault}
-                          value={option.isDefault ? "" : option.price}
-                          onChange={(event) =>
-                            updateGroup(group.uid, (current) => ({
-                              ...current,
-                              options: current.options.map((item) =>
-                                item.uid === option.uid ? { ...item, price: event.target.value } : item,
-                              ),
-                            }))
-                          }
-                          aria-label="Preço adicional"
-                          title={option.isDefault ? "Itens inclusos já estão no preço do produto" : undefined}
-                        />
+                        <h4 className="text-body-medium font-semibold text-on-surface">{section.title}</h4>
                       </div>
-                      <AvailabilityToggle
-                        available={option.isAvailable}
-                        onChange={(isAvailable) =>
-                          updateGroup(group.uid, (current) => ({
-                            ...current,
-                            options: current.options.map((item) =>
-                              item.uid === option.uid ? { ...item, isAvailable } : item,
-                            ),
-                          }))
-                        }
-                      />
-                      <RemoveButton
-                        label="Remover opção"
-                        onClick={() =>
-                          updateGroup(group.uid, (current) => ({
-                            ...current,
-                            options: current.options.filter((item) => item.uid !== option.uid),
-                          }))
-                        }
-                      />
-                    </li>
-                  ))}
-                </ul>
-                <button
-                  type="button"
-                  className="inline-flex w-fit items-center gap-1 rounded-lg px-2 py-1 text-body-compact font-medium text-primary hover:bg-primary-fixed/40"
-                  onClick={() => addOption(group)}
-                >
-                  <Icon name="add" />
-                  Adicionar opção
-                </button>
-              </article>
-            ))}
-
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              {presets.map((preset) => (
-                <button
-                  key={preset.id}
-                  type="button"
-                  className="flex items-start gap-2 rounded-lg border border-dashed border-outline-variant/60 p-2.5 text-left hover:border-primary hover:bg-primary-fixed/20"
-                  onClick={() => addGroup(preset.id)}
-                >
-                  <Icon name={preset.icon} className="text-primary" />
-                  <span>
-                    <span className="block text-body-compact font-medium text-on-surface">+ {preset.label}</span>
-                    <span className="block text-label-regular text-outline">{preset.hint}</span>
-                  </span>
-                </button>
-              ))}
-            </div>
+                      <span className="text-label-regular text-outline">
+                        {groups.length === 0
+                          ? "Nenhum grupo"
+                          : `${groups.length} ${groups.length === 1 ? "grupo" : "grupos"}`}
+                      </span>
+                    </div>
+                    <p className="text-label-regular text-outline">{section.subtitle}</p>
+                  </div>
+                  {list}
+                </div>
+              );
+            })}
           </section>
         </div>
 
@@ -568,6 +630,45 @@ function AvailabilityToggle({ available, onChange }: { available: boolean; onCha
       <Icon name={available ? "check_circle" : "block"} className="text-[16px]" />
       {available ? "Disponível" : "Em falta"}
     </button>
+  );
+}
+
+function PresetButtons({ compact, onPick }: { compact: boolean; onPick: (preset: Preset) => void }) {
+  if (compact) {
+    return (
+      <div className="flex flex-wrap gap-1.5">
+        {presets.map((preset) => (
+          <button
+            key={preset.id}
+            type="button"
+            className="inline-flex items-center gap-1 rounded-full border border-dashed border-outline-variant/60 px-2.5 py-1 text-label-regular font-medium text-on-surface-variant hover:border-primary hover:bg-primary-fixed/20 hover:text-primary"
+            onClick={() => onPick(preset.id)}
+            title={preset.hint}
+          >
+            <Icon name={preset.icon} className="text-[16px] text-primary" />
+            {preset.label}
+          </button>
+        ))}
+      </div>
+    );
+  }
+  return (
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+      {presets.map((preset) => (
+        <button
+          key={preset.id}
+          type="button"
+          className="flex items-start gap-2 rounded-lg border border-dashed border-outline-variant/60 p-2.5 text-left hover:border-primary hover:bg-primary-fixed/20"
+          onClick={() => onPick(preset.id)}
+        >
+          <Icon name={preset.icon} className="text-primary" />
+          <span>
+            <span className="block text-body-compact font-medium text-on-surface">+ {preset.label}</span>
+            <span className="block text-label-regular text-outline">{preset.hint}</span>
+          </span>
+        </button>
+      ))}
+    </div>
   );
 }
 
