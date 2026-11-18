@@ -134,6 +134,7 @@ export async function addMemberAction(_state: ActionState, formData: FormData): 
       ...parsed.data,
       password: parsed.data.password || undefined,
     });
+    revalidatePath("/painel/funcionarios");
     return { success: "Funcionário salvo." };
   } catch (error) {
     return actionError(error);
@@ -147,6 +148,7 @@ export async function removeMemberAction(
   try {
     const actor = await requireActor();
     await removeMember(actor, String(formData.get("memberId")));
+    revalidatePath("/painel/funcionarios");
     return { success: "Funcionário desligado." };
   } catch (error) {
     return actionError(error);
@@ -160,6 +162,7 @@ export async function transferOwnershipAction(
   try {
     const actor = await requireActor();
     await transferOwnership(actor, String(formData.get("memberId")));
+    revalidatePath("/painel", "layout");
     return { success: "Propriedade transferida." };
   } catch (error) {
     return actionError(error);
