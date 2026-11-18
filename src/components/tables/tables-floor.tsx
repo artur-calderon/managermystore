@@ -106,7 +106,7 @@ export function TablesFloor({
         </div>
         {canManage ? (
           <Link
-            href="/painel/mesas/cadastro"
+            href="/painel/mesas/cadastro?nova=1"
             className="inline-flex h-8 items-center gap-1.5 rounded bg-primary px-3.5 text-body-compact font-medium text-on-primary shadow-sm hover:bg-primary-container"
           >
             <Icon name="add" />

@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect, useRef } from "react";
 import { useFormStatus } from "react-dom";
 
 import type { ActionState } from "@/server/action";
@@ -9,12 +9,24 @@ export function BoundForm({
   action,
   children,
   className = "grid gap-3",
+  onSuccess,
 }: {
   action: (state: ActionState, formData: FormData) => Promise<ActionState>;
   children: React.ReactNode;
   className?: string;
+  /** Chamado a cada envio concluído com sucesso (ex.: fechar um modal). */
+  onSuccess?: () => void;
 }) {
   const [state, formAction] = useActionState(action, null);
+  const onSuccessRef = useRef(onSuccess);
+
+  useEffect(() => {
+    onSuccessRef.current = onSuccess;
+  });
+
+  useEffect(() => {
+    if (state?.success) onSuccessRef.current?.();
+  }, [state]);
 
   return (
     <form action={formAction} className={className}>
