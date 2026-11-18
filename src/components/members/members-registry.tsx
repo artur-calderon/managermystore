@@ -44,7 +44,8 @@ export function MembersRegistry({
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("active");
-  const [adding, setAdding] = useState(false);
+  // null = modal fechado; os campos vêm preenchidos ao readmitir alguém desligado.
+  const [adding, setAdding] = useState<{ name: string; email: string; role: Role } | null>(null);
 
   const current = members.filter((member) => member.status !== "removed");
   const removedCount = members.length - current.length;
@@ -66,7 +67,8 @@ export function MembersRegistry({
     })
     .sort((a, b) => Number(b.role === "owner") - Number(a.role === "owner") || a.name.localeCompare(b.name));
 
-  const closeModal = () => setAdding(false);
+  const closeModal = () => setAdding(null);
+  const readmitting = Boolean(adding?.email);
 
   return (
     <div className="flex flex-col gap-space-lg">
@@ -85,7 +87,7 @@ export function MembersRegistry({
         <button
           type="button"
           className="inline-flex w-fit items-center gap-1.5 rounded-lg bg-primary px-3.5 py-1.5 text-body-compact font-medium text-on-primary shadow-sm hover:bg-primary-container"
-          onClick={() => setAdding(true)}
+          onClick={() => setAdding({ name: "", email: "", role: "waiter" })}
         >
           <Icon name="person_add" />
           Adicionar funcionário
@@ -157,7 +159,18 @@ export function MembersRegistry({
                 </tr>
               ) : (
                 visible.map((member) => {
-                  const manageable = member.status !== "removed" && member.role !== "owner" && !member.isSelf;
+                  // Motivo para a ação ficar bloqueada (null = pode).
+                  const lockReason =
+                    member.role === "owner"
+                      ? "O proprietário não pode ser desligado"
+                      : member.isSelf
+                        ? "Você não pode desligar a própria conta"
+                        : null;
+                  const transferLock = !canTransferOwnership
+                    ? "Só o proprietário pode transferir a loja"
+                    : member.role === "owner"
+                      ? "Já é o proprietário"
+                      : null;
                   return (
                     <tr key={member.id} className="transition-colors hover:bg-surface-container-low/40">
                       <td className="px-3.5 py-2.5">
@@ -196,15 +209,30 @@ export function MembersRegistry({
                         <StatusPill status={member.status} />
                       </td>
                       <td className="px-3 py-2.5 text-right">
-                        {manageable ? (
+                        {member.status === "removed" ? (
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 rounded px-2 py-1 text-label-regular text-primary hover:bg-surface-container"
+                            title="Readmitir funcionário"
+                            onClick={() =>
+                              setAdding({ name: member.name, email: member.email, role: member.role })
+                            }
+                          >
+                            <Icon name="person_add" />
+                            Readmitir
+                          </button>
+                        ) : (
                           <div className="inline-flex items-center gap-1">
-                            {canTransferOwnership ? (
+                            {transferLock ? (
+                              <LockedAction icon="workspace_premium" reason={transferLock} />
+                            ) : (
                               <BoundForm action={transferOwnershipAction} className="inline">
                                 <input type="hidden" name="memberId" value={member.id} />
                                 <button
                                   type="submit"
                                   className="rounded p-1 text-outline transition-colors hover:bg-surface-container hover:text-primary"
                                   title="Tornar proprietário"
+                                  aria-label={`Tornar ${member.name} proprietário`}
                                   onClick={(event) => {
                                     if (
                                       !window.confirm(
@@ -218,25 +246,28 @@ export function MembersRegistry({
                                   <Icon name="workspace_premium" />
                                 </button>
                               </BoundForm>
-                            ) : null}
-                            <BoundForm action={removeMemberAction} className="inline">
-                              <input type="hidden" name="memberId" value={member.id} />
-                              <button
-                                type="submit"
-                                className="rounded p-1 text-outline transition-colors hover:bg-surface-container hover:text-error"
-                                title="Desligar funcionário"
-                                onClick={(event) => {
-                                  if (!window.confirm(`Desligar ${member.name}? A pessoa perde o acesso à loja.`)) {
-                                    event.preventDefault();
-                                  }
-                                }}
-                              >
-                                <Icon name="person_remove" />
-                              </button>
-                            </BoundForm>
+                            )}
+                            {lockReason ? (
+                              <LockedAction icon="person_remove" reason={lockReason} />
+                            ) : (
+                              <BoundForm action={removeMemberAction} className="inline">
+                                <input type="hidden" name="memberId" value={member.id} />
+                                <button
+                                  type="submit"
+                                  className="rounded p-1 text-outline transition-colors hover:bg-surface-container hover:text-error"
+                                  title="Desligar funcionário"
+                                  aria-label={`Desligar ${member.name}`}
+                                  onClick={(event) => {
+                                    if (!window.confirm(`Desligar ${member.name}? A pessoa perde o acesso à loja.`)) {
+                                      event.preventDefault();
+                                    }
+                                  }}
+                                >
+                                  <Icon name="person_remove" />
+                                </button>
+                              </BoundForm>
+                            )}
                           </div>
-                        ) : (
-                          <span className="text-label-micro text-outline">—</span>
                         )}
                       </td>
                     </tr>
@@ -256,36 +287,57 @@ export function MembersRegistry({
       </div>
 
       {adding ? (
-        <FormModal title="Adicionar funcionário" icon="person_add" onClose={closeModal}>
+        <FormModal
+          title={readmitting ? `Readmitir ${adding.name}` : "Adicionar funcionário"}
+          icon="person_add"
+          onClose={closeModal}
+        >
           <BoundForm action={addMemberAction} onSuccess={closeModal}>
             <label className="grid gap-1 text-label-regular font-medium text-on-surface">
               <span>
                 Nome <span className="text-primary">*</span>
               </span>
-              <input className={fieldClassName} name="name" placeholder="ex: Maria Souza" autoFocus required />
+              <input
+                className={fieldClassName}
+                name="name"
+                placeholder="ex: Maria Souza"
+                defaultValue={adding.name}
+                autoFocus
+                required
+              />
             </label>
             <label className="grid gap-1 text-label-regular font-medium text-on-surface">
               <span>
                 E-mail <span className="text-primary">*</span>
               </span>
-              <input className={fieldClassName} name="email" type="email" placeholder="maria@email.com" required />
+              <input
+                className={fieldClassName}
+                name="email"
+                type="email"
+                placeholder="maria@email.com"
+                defaultValue={adding.email}
+                readOnly={readmitting}
+                required
+              />
               <span className="text-label-micro font-normal text-on-surface-variant">
                 Usado para entrar no sistema.
               </span>
             </label>
-            <label className="grid gap-1 text-label-regular font-medium text-on-surface">
-              Senha
-              <input
-                className={fieldClassName}
-                name="password"
-                type="password"
-                autoComplete="new-password"
-                placeholder="Senha de acesso"
-              />
-              <span className="text-label-micro font-normal text-on-surface-variant">
-                Obrigatória para quem ainda não tem conta. Se o e-mail já tem conta, deixe em branco.
-              </span>
-            </label>
+            {readmitting ? null : (
+              <label className="grid gap-1 text-label-regular font-medium text-on-surface">
+                Senha
+                <input
+                  className={fieldClassName}
+                  name="password"
+                  type="password"
+                  autoComplete="new-password"
+                  placeholder="Senha de acesso"
+                />
+                <span className="text-label-micro font-normal text-on-surface-variant">
+                  Obrigatória para quem ainda não tem conta. Se o e-mail já tem conta, deixe em branco.
+                </span>
+              </label>
+            )}
             <fieldset className="grid gap-1.5">
               <legend className="mb-1 text-label-regular font-medium text-on-surface">
                 Papel <span className="text-primary">*</span>
@@ -300,7 +352,7 @@ export function MembersRegistry({
                       type="radio"
                       name="role"
                       value={item.role}
-                      defaultChecked={item.role === "waiter"}
+                      defaultChecked={item.role === adding.role}
                       className="sr-only"
                     />
                     <Icon name={item.icon} className="text-primary" />
@@ -322,7 +374,7 @@ export function MembersRegistry({
               >
                 Cancelar
               </button>
-              <SubmitButton>Adicionar funcionário</SubmitButton>
+              <SubmitButton>{readmitting ? "Readmitir" : "Adicionar funcionário"}</SubmitButton>
             </div>
           </BoundForm>
         </FormModal>
@@ -336,6 +388,19 @@ function initials(name: string) {
   const first = parts[0]?.[0] ?? "?";
   const last = parts.length > 1 ? parts[parts.length - 1][0] : "";
   return (first + last).toUpperCase();
+}
+
+function LockedAction({ icon, reason }: { icon: string; reason: string }) {
+  return (
+    <span
+      className="inline-flex cursor-not-allowed rounded p-1 text-outline opacity-35"
+      title={reason}
+      aria-label={reason}
+      role="img"
+    >
+      <Icon name={icon} />
+    </span>
+  );
 }
 
 function StatusPill({ status }: { status: RegistryMember["status"] }) {
