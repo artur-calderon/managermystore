@@ -244,6 +244,16 @@ export async function updateEstablishment(
   return establishment;
 }
 
+/** Conta existe e não foi desativada (checado a cada requisição, não só no login). */
+export async function isUserActive(userId: string) {
+  const [user] = await db
+    .select({ disabledAt: users.disabledAt })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  return Boolean(user) && !user.disabledAt;
+}
+
 export async function getMemberships(userId: string) {
   return listActiveMemberships(db, userId);
 }

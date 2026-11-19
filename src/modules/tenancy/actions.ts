@@ -1,13 +1,14 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { signIn, signOut } from "@/lib/auth";
 import { loginSchema, memberSchema, registerSchema } from "@/lib/validations/forms";
 import { ESTABLISHMENT_COOKIE, requireActor, requireUserId } from "@/server/context";
 import { actionError, type ActionState } from "@/server/action";
+import { clientIp } from "@/server/login-throttle";
 
 import {
   addMember,
@@ -87,7 +88,7 @@ export async function loginAction(_state: ActionState, formData: FormData): Prom
 
 async function resolveUserAfterLogin(email: string, password: string) {
   const { authorizeCredentials } = await import("@/lib/credentials");
-  const user = await authorizeCredentials(email, password);
+  const user = await authorizeCredentials(email, password, clientIp(await headers()));
   if (!user) {
     throw new (await import("@/server/errors")).AppError("invalid_login", "E-mail ou senha inválidos.");
   }

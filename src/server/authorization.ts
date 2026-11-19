@@ -44,7 +44,8 @@ const staff: Action[] = [
 const grants: Record<Role, readonly Action[]> = {
   owner: [...staff, "ownership.transfer"],
   admin: staff,
-  waiter: ["catalog.view", "tables.view", "orders.view", "orders.create", "orders.updateItems"],
+  // Garçom lança pedidos novos pelo modo garçom; não altera itens de pedidos já enviados.
+  waiter: ["catalog.view", "tables.view", "orders.view", "orders.create"],
   kitchen: ["catalog.view", "orders.view", "orders.kitchen"],
   cashier: ["orders.view", "orders.close", "orders.cancel", "cash.manage", "reports.view"],
 };
@@ -67,9 +68,31 @@ const restrictedPages: Partial<Record<Role, readonly string[]>> = {
   waiter: ["/garcom", "/painel/pedidos"],
 };
 
+/**
+ * Permissão necessária para abrir cada tela (basta uma da lista). Vale também para quem digita o
+ * endereço direto na barra do navegador — o menu só esconde o link. "/painel" (visão geral) é de todos.
+ */
+const pageRequirements: Record<string, readonly Action[]> = {
+  "/garcom": ["orders.create"],
+  "/painel/pedidos": ["orders.view"],
+  "/painel/cozinha": ["orders.kitchen"],
+  "/painel/mesas": ["tables.view", "tables.manage"],
+  "/painel/mesas/cadastro": ["tables.manage"],
+  "/painel/produtos": ["catalog.view", "catalog.manage"],
+  "/painel/categorias": ["catalog.manage"],
+  "/painel/caixa": ["cash.manage"],
+  "/painel/delivery": ["delivery.manage"],
+  "/painel/relatorios": ["reports.view"],
+  "/painel/funcionarios": ["members.manage"],
+};
+
 export function canAccessPage(role: Role, path: string): boolean {
   const allowed = restrictedPages[role];
-  return !allowed || allowed.includes(path);
+  if (allowed && !allowed.includes(path)) {
+    return false;
+  }
+  const required = pageRequirements[path];
+  return !required || required.some((action) => can(role, action));
 }
 
 /** Tela inicial de cada papel após o login. */

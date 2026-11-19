@@ -150,8 +150,16 @@ describe("estabelecimento e pedidos", () => {
     expect(saved.items[0]?.unitPrice).toBe("8.00");
     expect(saved.items[0]?.productName).toBe("Suco");
 
+    // Garçom só lança pedidos novos: não altera nem remove itens de pedidos já enviados.
+    await expect(
+      upsertOrderItem(waiter, waiterOrder.id, { productId: product.id, quantity: 9 }),
+    ).rejects.toMatchObject({ code: "forbidden" });
+    await expect(removeOrderItem(waiter, waiterOrder.id, saved.items[0].id)).rejects.toMatchObject({
+      code: "forbidden",
+    });
+
     await updateProduct(owner, product.id, { price: "10.00" });
-    const changed = await upsertOrderItem(waiter, waiterOrder.id, {
+    const changed = await upsertOrderItem(owner, waiterOrder.id, {
       productId: product.id,
       quantity: 3,
     });
@@ -160,11 +168,11 @@ describe("estabelecimento e pedidos", () => {
     expect(repriced.items[0]?.unitPrice).toBe("10.00");
 
     await advanceOrder(kitchen, waiterOrder.id);
-    await expect(upsertOrderItem(waiter, waiterOrder.id, {
+    await expect(upsertOrderItem(owner, waiterOrder.id, {
       productId: product.id,
       quantity: 1,
     })).rejects.toMatchObject({ code: "final_order" });
-    await expect(removeOrderItem(waiter, waiterOrder.id, repriced.items[0].id)).rejects.toMatchObject({
+    await expect(removeOrderItem(owner, waiterOrder.id, repriced.items[0].id)).rejects.toMatchObject({
       code: "final_order",
     });
 

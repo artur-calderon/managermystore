@@ -5,6 +5,12 @@ import { and, eq, gt, isNull, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { customerAddresses, customerSessions, customers } from "@/lib/db/schema";
 import { AppError } from "@/server/errors";
+import {
+  assertLoginAllowed,
+  clearLoginFailures,
+  customerScope,
+  recordLoginFailure,
+} from "@/server/login-throttle";
 import { hashPassword, verifyPassword } from "@/server/password";
 
 export const CUSTOMER_SESSION_DAYS = 30;
@@ -74,12 +80,26 @@ export async function registerCustomer(
   }
 }
 
+/** Confere e-mail e senha do cliente; lança `rate_limited` depois de muitas falhas seguidas. */
 export async function authenticateCustomer(
   establishmentId: string,
   emailInput: string,
   password: string,
+  ip: string | null = null,
 ): Promise<Customer | null> {
   const email = emailInput.trim().toLowerCase();
+  const scope = customerScope(establishmentId, email, ip);
+  await assertLoginAllowed(scope);
+  const customer = await checkCustomerPassword(establishmentId, email, password);
+  if (customer) {
+    await clearLoginFailures(scope);
+  } else {
+    await recordLoginFailure(scope);
+  }
+  return customer;
+}
+
+async function checkCustomerPassword(establishmentId: string, email: string, password: string) {
   const [row] = await db
     .select({ ...customerColumns, passwordHash: customers.passwordHash })
     .from(customers)

@@ -4,7 +4,7 @@ import { connection } from "next/server";
 
 import { auth } from "@/lib/auth";
 import { roleValues, type Role } from "@/lib/db/schema";
-import { getMemberships } from "@/modules/tenancy/service";
+import { getMemberships, isUserActive } from "@/modules/tenancy/service";
 
 import { canAccessPage, homePathFor } from "./authorization";
 
@@ -32,7 +32,14 @@ export async function resolveActor(): Promise<SessionActorResolution> {
     return { redirectTo: "/entrar" };
   }
 
-  const memberships = await getMemberships(session.user.id);
+  const [active, memberships] = await Promise.all([
+    isUserActive(session.user.id),
+    getMemberships(session.user.id),
+  ]);
+  // Usuário desativado perde o acesso na hora, mesmo com o token de login ainda válido.
+  if (!active) {
+    return { redirectTo: "/entrar" };
+  }
   if (memberships.length === 0) {
     return { redirectTo: "/cadastrar" };
   }
@@ -70,7 +77,7 @@ export async function requireActor(): Promise<SessionActor> {
 export async function requireUserId() {
   await connection();
   const session = await auth();
-  if (!session?.user?.id) {
+  if (!session?.user?.id || !(await isUserActive(session.user.id))) {
     redirect("/entrar");
   }
   return session.user.id;

@@ -5,6 +5,8 @@ import Credentials from "next-auth/providers/credentials";
 import { authorizeCredentials } from "@/lib/credentials";
 import { db } from "@/lib/db";
 import { accounts, sessions, users, verificationTokens } from "@/lib/db/schema";
+import { AppError } from "@/server/errors";
+import { clientIp } from "@/server/login-throttle";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: DrizzleAdapter(db, {
@@ -21,10 +23,16 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         email: {},
         password: {},
       },
-      async authorize(credentials) {
+      async authorize(credentials, request) {
         const email = String(credentials?.email ?? "");
         const password = String(credentials?.password ?? "");
-        return authorizeCredentials(email, password);
+        try {
+          return await authorizeCredentials(email, password, clientIp(request.headers));
+        } catch (error) {
+          // Bloqueado por excesso de tentativas: recusa o login sem detalhar o motivo aqui.
+          if (error instanceof AppError) return null;
+          throw error;
+        }
       },
     }),
   ],

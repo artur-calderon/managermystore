@@ -33,9 +33,13 @@ async function Products() {
     products.map((product) => product.id),
   );
 
+  const canManage = can(actor.role, "catalog.manage");
+
   const rows: RegistryProduct[] = products.map((product) => {
     const price = Number(product.price);
-    const cost = product.costPrice === null ? null : Number(product.costPrice);
+    // Custo e margem são dados de gestão: nem chegam ao navegador de quem só consulta o cardápio.
+    const costPrice = canManage ? product.costPrice : null;
+    const cost = costPrice === null ? null : Number(costPrice);
     const marginLabel =
       cost !== null && Number.isFinite(price) && price > 0
         ? `${Math.round(((price - cost) / price) * 100)}% margem`
@@ -47,8 +51,8 @@ async function Products() {
       description: product.description,
       price: product.price,
       priceLabel: formatMoney(product.price),
-      costPrice: product.costPrice,
-      costPriceLabel: product.costPrice === null ? null : formatMoney(product.costPrice),
+      costPrice,
+      costPriceLabel: costPrice === null ? null : formatMoney(costPrice),
       marginLabel,
       stockQuantity: product.stockQuantity,
       isAvailable: product.isAvailable,
@@ -67,7 +71,7 @@ async function Products() {
     <ProductsRegistry
       products={rows}
       categories={categoryRows}
-      canManage={can(actor.role, "catalog.manage")}
+      canManage={canManage}
       catalogHref={`/loja/${actor.slug}`}
     />
   );

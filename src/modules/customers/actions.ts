@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
 import {
@@ -18,6 +19,7 @@ import {
   startCustomerSession,
 } from "@/server/customer-session";
 import { AppError } from "@/server/errors";
+import { clientIp } from "@/server/login-throttle";
 
 import { authenticateCustomer, createAddress, deleteAddress, registerCustomer } from "./service";
 
@@ -73,7 +75,12 @@ export async function loginCustomerAction(_state: ActionState, formData: FormDat
       return { error: parsed.error.issues[0]?.message ?? "Dados inválidos." };
     }
 
-    const customer = await authenticateCustomer(store.id, parsed.data.email, parsed.data.password);
+    const customer = await authenticateCustomer(
+      store.id,
+      parsed.data.email,
+      parsed.data.password,
+      clientIp(await headers()),
+    );
     if (!customer) {
       return { error: "E-mail ou senha incorretos." };
     }

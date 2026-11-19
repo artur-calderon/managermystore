@@ -64,6 +64,13 @@
       "when": 1794877200000,
       "tag": "0008_product_variations",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1794880800000,
+      "tag": "0009_auth_attempts",
+      "breakpoints": true
     }
   ]
 }
